@@ -1039,44 +1039,54 @@ type handlerJob struct {
 // RequestHandler reads and processes client requests from the request channel.
 // Each request is run with exclusive access to the account manager.
 func (s *rpcServer) RequestHandler() {
+	rs := make(chan handlerResponse)
 out:
 	for {
 		select {
 		case r := <-s.requests:
-			AcctMgr.Grab()
-			result, err := r.handler(r.request)
-			AcctMgr.Release()
+			// to avoid getting hung up in the handler when s.quit
+			// is received, start a goroutine which fetches the response
+			go func() {
+				AcctMgr.Grab()
+				result, err := r.handler(r.request)
+				AcctMgr.Release()
 
-			var jsonErr *btcjson.Error
-			if err != nil {
-				jsonErr = &btcjson.Error{Message: err.Error()}
-				switch e := err.(type) {
-				case btcjson.Error:
-					*jsonErr = e
-				case *btcjson.Error:
-					*jsonErr = *e
-				case DeserializationError:
-					jsonErr.Code = btcjson.ErrDeserialization.Code
-				case InvalidParameterError:
-					jsonErr.Code = btcjson.ErrInvalidParameter.Code
-				case ParseError:
-					jsonErr.Code = btcjson.ErrParse.Code
-				case InvalidAddressOrKeyError:
-					jsonErr.Code = btcjson.ErrInvalidAddressOrKey.Code
-				default: // All other errors get the wallet error code.
-					jsonErr.Code = btcjson.ErrWallet.Code
+				var jsonErr *btcjson.Error
+				if err != nil {
+					jsonErr = &btcjson.Error{Message: err.Error()}
+					switch e := err.(type) {
+					case btcjson.Error:
+						*jsonErr = e
+					case DeserializationError:
+						jsonErr.Code = btcjson.ErrDeserialization.Code
+					case InvalidParameterError:
+						jsonErr.Code = btcjson.ErrInvalidParameter.Code
+					case ParseError:
+						jsonErr.Code = btcjson.ErrParse.Code
+					case InvalidAddressOrKeyError:
+						jsonErr.Code = btcjson.ErrInvalidAddressOrKey.Code
+					default: // All other errors get the wallet error code.
+						jsonErr.Code = btcjson.ErrWallet.Code
+					}
 				}
-			}
-			// The goroutine which requested this may not be running
-			// anymore.  If the quit chan is read instead, break out
-			// of the loop now so more requests aren't potentially
-			// read after reentering the loop.
+				rs <- handlerResponse{result, jsonErr}
+			}()
+			// be ready to quit when s.quit is received
+			// even if a reponse fetch is in progress
 			select {
-			case r.response <- handlerResponse{result, jsonErr}:
+			case resp := <-rs:
+				// The goroutine which requested this may not be running
+				// anymore.  If the quit chan is read instead, break out
+				// of the loop now so more requests aren't potentially
+				// read after reentering the loop.
+				select {
+				case r.response <- resp:
+				case <-s.quit:
+					break out
+				}
 			case <-s.quit:
 				break out
 			}
-
 		case <-s.quit:
 			break out
 		}
