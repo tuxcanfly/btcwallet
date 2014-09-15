@@ -27,8 +27,8 @@ import (
 	"github.com/conformal/btcchain"
 	"github.com/conformal/btcscript"
 	"github.com/conformal/btcutil"
-	"github.com/conformal/btcwallet/keystore"
 	"github.com/conformal/btcwallet/txstore"
+	"github.com/conformal/btcwallet/waddrmgr"
 	"github.com/conformal/btcwire"
 )
 
@@ -119,9 +119,9 @@ func selectInputs(eligible []txstore.Credit, amt, fee btcutil.Amount,
 func (w *Wallet) txToPairs(pairs map[string]btcutil.Amount,
 	minconf int) (*CreatedTx, error) {
 
-	// Key store must be unlocked to compose transaction.  Grab the
-	// unlock if possible (to prevent future unlocks), or return the
-	// error if the keystore is already locked.
+	// Address manager store must be unlocked to compose transaction.  Grab
+	// the unlock if possible (to prevent future unlocks), or return the
+	// error if already locked.
 	heldUnlock, err := w.HoldUnlock()
 	if err != nil {
 		return nil, err
@@ -190,16 +190,20 @@ func (w *Wallet) txToPairs(pairs map[string]btcutil.Amount,
 		if change > 0 {
 			// Get a new change address if one has not already been found.
 			if changeAddr == nil {
-				changeAddr, err = w.KeyStore.ChangeAddress(bs)
+				changeAddrs, err := w.Manager.NextInternalAddresses(0, 1)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get next address: %s", err)
 				}
-				w.KeyStore.MarkDirty()
-				err = w.chainSvr.NotifyReceived([]btcutil.Address{changeAddr})
+				utilAddrs := make([]btcutil.Address, len(changeAddrs))
+				for i := 0; i < len(changeAddrs); i++ {
+					utilAddrs[i] = changeAddrs[i].Address()
+				}
+				err = w.chainSvr.NotifyReceived(utilAddrs)
 				if err != nil {
 					return nil, fmt.Errorf("cannot request updates for "+
 						"change address: %v", err)
 				}
+				changeAddr = utilAddrs[0]
 			}
 
 			// Spend change.
@@ -270,7 +274,7 @@ func addOutputs(msgtx *btcwire.MsgTx, pairs map[string]btcutil.Amount) error {
 	return nil
 }
 
-func (w *Wallet) findEligibleOuptuts(minconf int, bs *keystore.BlockStamp) ([]txstore.Credit, error) {
+func (w *Wallet) findEligibleOuptuts(minconf int, bs *waddrmgr.BlockStamp) ([]txstore.Credit, error) {
 	unspent, err := w.TxStore.UnspentOutputs()
 	if err != nil {
 		return nil, err
@@ -324,12 +328,12 @@ func (w *Wallet) addInputsToTx(msgtx *btcwire.MsgTx, outputs []txstore.Credit) e
 			return UnsupportedTransactionType
 		}
 
-		ai, err := w.KeyStore.Address(apkh)
+		ai, err := w.Manager.Address(apkh)
 		if err != nil {
 			return fmt.Errorf("cannot get address info: %v", err)
 		}
 
-		pka := ai.(keystore.PubKeyAddress)
+		pka := ai.(waddrmgr.ManagedPubKeyAddress)
 
 		privkey, err := pka.PrivKey()
 		if err != nil {
@@ -337,7 +341,8 @@ func (w *Wallet) addInputsToTx(msgtx *btcwire.MsgTx, outputs []txstore.Credit) e
 		}
 
 		sigscript, err := btcscript.SignatureScript(
-			msgtx, i, output.TxOut().PkScript, btcscript.SigHashAll, privkey, ai.Compressed())
+			msgtx, i, output.TxOut().PkScript, btcscript.SigHashAll,
+			privkey, ai.Compressed())
 		if err != nil {
 			return fmt.Errorf("cannot create sigscript: %s", err)
 		}

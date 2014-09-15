@@ -132,8 +132,8 @@ func defaultNewSecretKey(passphrase *[]byte) (*snacl.SecretKey, error) {
 // paths.
 var newSecretKey = defaultNewSecretKey
 
-// EncryptorDecryptor provides an abstraction on top of snacl.CryptoKey so that our
-// tests can use dependency injection to force the behaviour they need.
+// EncryptorDecryptor provides an abstraction on top of snacl.CryptoKey so that
+// tests can use dependency injection to force the behavior they need.
 type EncryptorDecryptor interface {
 	Encrypt(in []byte) ([]byte, error)
 	Decrypt(in []byte) ([]byte, error)
