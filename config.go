@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/conformal/btcutil"
+	"github.com/conformal/btcwallet/legacy/keystore"
 	"github.com/conformal/btcwire"
 	"github.com/conformal/go-flags"
 )
@@ -389,8 +390,15 @@ func loadConfig() (*config, []string, error) {
 		os.Exit(0)
 
 	} else if !fileExists(mgrPath) {
-		err := fmt.Errorf("The wallet does not exist.  Run with the " +
-			"--create option to initialize and create it.")
+		var err error
+		keystorePath := filepath.Join(netDir, keystore.Filename)
+		if !fileExists(keystorePath) {
+			err = fmt.Errorf("The wallet does not exist.  Run with the " +
+				"--create option to initialize and create it.")
+		} else {
+			err = fmt.Errorf("The wallet is in legacy format.  Run with the " +
+				"--create option to import it.")
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return nil, nil, err
 	}
