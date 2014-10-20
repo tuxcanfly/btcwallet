@@ -46,11 +46,11 @@ var (
 	ErrNotSynced = errors.New("wallet is not synchronized with the chain server")
 )
 
-// walletPubPassphrase is the default public wallet passphrase which is
+// defaultPubPassphrase is the default public wallet passphrase which is
 // used when the user indicates they do not want additional protection
 // provided by having all public data in the wallet encrypted by a
 // passphrase only known to them.
-var walletPubPassphrase = "public"
+var defaultPubPassphrase = []byte("public")
 
 // networkDir returns the directory name of a network directory to hold wallet
 // files.
