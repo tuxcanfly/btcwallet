@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"code.google.com/p/go.crypto/ssh/terminal"
+
 	"github.com/conformal/btcec"
 	"github.com/conformal/btcutil"
 	"github.com/conformal/btcutil/hdkeychain"
@@ -86,10 +88,12 @@ func promptConsolePass(reader *bufio.Reader, prefix string, confirm bool) (strin
 	prompt := fmt.Sprintf("%s: ", prefix)
 	for {
 		fmt.Print(prompt)
-		pass, err := reader.ReadString('\n')
+		passBytes, err := terminal.ReadPassword(0)
 		if err != nil {
 			return "", err
 		}
+		fmt.Print("\n")
+		pass := string(passBytes)
 		pass = strings.TrimSpace(pass)
 		if pass == "" {
 			continue
@@ -100,10 +104,12 @@ func promptConsolePass(reader *bufio.Reader, prefix string, confirm bool) (strin
 		}
 
 		fmt.Print("Confirm passphrase: ")
-		confirm, err := reader.ReadString('\n')
+		confirmBytes, err := terminal.ReadPassword(0)
 		if err != nil {
 			return "", err
 		}
+		fmt.Print("\n")
+		confirm := string(confirmBytes)
 		confirm = strings.TrimSpace(confirm)
 		if pass != confirm {
 			fmt.Println("The entered passphrases do not match")
