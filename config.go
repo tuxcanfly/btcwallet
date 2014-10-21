@@ -68,7 +68,7 @@ type config struct {
 	Password         string   `short:"P" long:"password" default-mask:"-" description:"Password for client and btcd authorization"`
 	BtcdUsername     string   `long:"btcdusername" description:"Alternative username for btcd authorization"`
 	BtcdPassword     string   `long:"btcdpassword" default-mask:"-" description:"Alternative password for btcd authorization"`
-	WalletPass       []byte   `long:"walletpass" default-mask:"-" description:"The public wallet password -- Only required if the wallet was created with one"`
+	WalletPass       string   `long:"walletpass" default-mask:"-" description:"The public wallet password -- Only required if the wallet was created with one"`
 	RPCCert          string   `long:"rpccert" description:"File containing the certificate file"`
 	RPCKey           string   `long:"rpckey" description:"File containing the certificate key"`
 	RPCMaxClients    int64    `long:"rpcmaxclients" description:"Max number of RPC clients for standard connections"`

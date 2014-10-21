@@ -50,7 +50,7 @@ var (
 // used when the user indicates they do not want additional protection
 // provided by having all public data in the wallet encrypted by a
 // passphrase only known to them.
-var defaultPubPassphrase = []byte("public")
+const defaultPubPassphrase = "public"
 
 // networkDir returns the directory name of a network directory to hold wallet
 // files.

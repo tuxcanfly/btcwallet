@@ -169,7 +169,7 @@ func promptConsolePrivatePass(reader *bufio.Reader, legacyKeyStore *keystore.Sto
 // both.  Finally, all prompts are repeated until the user enters a valid
 // response.
 func promptConsolePublicPass(reader *bufio.Reader, privPass []byte, cfg *config) ([]byte, error) {
-	pubPass := defaultPubPassphrase
+	pubPass := []byte(defaultPubPassphrase)
 	usePubPass, err := promptConsoleListBool(reader, "Do you want "+
 		"to add an additional layer of encryption for public "+
 		"data?", "no")
@@ -181,7 +181,8 @@ func promptConsolePublicPass(reader *bufio.Reader, privPass []byte, cfg *config)
 		return pubPass, nil
 	}
 
-	if !bytes.Equal(cfg.WalletPass, pubPass) {
+	walletPass := []byte(cfg.WalletPass)
+	if !bytes.Equal(walletPass, pubPass) {
 		useExisting, err := promptConsoleListBool(reader, "Use the "+
 			"existing configured public passphrase for encryption "+
 			"of public data?", "no")
@@ -190,7 +191,7 @@ func promptConsolePublicPass(reader *bufio.Reader, privPass []byte, cfg *config)
 		}
 
 		if useExisting {
-			return cfg.WalletPass, nil
+			return walletPass, nil
 		}
 	}
 
