@@ -133,7 +133,7 @@ func promptConsolePrivatePass(reader *bufio.Reader, legacyKeyStore *keystore.Sto
 			"passphrase for your new wallet", true)
 	}
 
-	// At this point, there is an existing legacy wallet, so prompr the user
+	// At this point, there is an existing legacy wallet, so prompt the user
 	// for the existing private passphrase and ensure it properly unlocks
 	// the legacy wallet so all of the addresses can later be imported.
 	fmt.Println("You have an existing legacy wallet.  All addresses from " +
@@ -340,7 +340,7 @@ func convertLegacyKeystore(legacyKeyStore *keystore.Store, manager *waddrmgr.Man
 
 		default:
 			fmt.Printf("WARN: Skipping unrecognized legacy "+
-				"keystore type: %T", addr)
+				"keystore type: %T\n", addr)
 			continue
 		}
 	}

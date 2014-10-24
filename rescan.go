@@ -172,7 +172,7 @@ out:
 	w.wg.Done()
 }
 
-// rescanProgressHandler handles notifications for paritally and fully completed
+// rescanProgressHandler handles notifications for partially and fully completed
 // rescans by marking each rescanned address as partially or fully synced.
 func (w *Wallet) rescanProgressHandler() {
 out:
