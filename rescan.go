@@ -264,6 +264,12 @@ func (w *Wallet) RescanActiveAddresses() error {
 		return err
 	}
 
+	// in case there are no addresses, we can skip queuing the rescan job
+	if len(addrs) == 0 {
+		close(w.chainSynced)
+		return nil
+	}
+
 	unspents, err := w.TxStore.UnspentOutputs()
 	if err != nil {
 		return err
