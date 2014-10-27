@@ -2793,9 +2793,14 @@ func ValidateAddress(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (inter
 	result.IsValid = true
 
 	ainfo, err := w.Manager.Address(addr)
+	if managerErr, ok := err.(waddrmgr.ManagerError); ok {
+		if managerErr.ErrorCode == waddrmgr.ErrAddressNotFound {
+			// No additional information available about the address.
+			return result, nil
+		}
+	}
 	if err != nil {
-		// No additional information available about the address.
-		return result, nil
+		return nil, err
 	}
 
 	// The address lookup was successful which means there is further
