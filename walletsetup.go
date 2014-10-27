@@ -245,11 +245,11 @@ func promptConsoleSeed(reader *bufio.Reader) ([]byte, error) {
 
 		fmt.Println("Your wallet generation seed is:")
 		fmt.Printf("%x\n", seed)
-		fmt.Println("IMPORTANT: Keep the seed in a safe place as you " +
+		fmt.Println("IMPORTANT: Keep the seed in a safe place as you\n" +
 			"will NOT be able to restore your wallet without it.")
-		fmt.Println("Please keep in mind that anyone who has access " +
-			"to the seed can also restore your wallet thereby " +
-			"giving them access to all your funds, so it is " +
+		fmt.Println("Please keep in mind that anyone who has access\n" +
+			"to the seed can also restore your wallet thereby\n" +
+			"giving them access to all your funds, so it is\n" +
 			"imperative that you keep it in a secure location.")
 
 		for {
