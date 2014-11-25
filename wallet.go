@@ -1161,7 +1161,7 @@ func (w *Wallet) Track() {
 	// TODO: return as slice? (doesn't have to be ordered)
 	addrs, err := w.Manager.AllActiveAddresses()
 	if err != nil {
-		log.Error("Unable to acquire list of active addresses: %v", err)
+		log.Errorf("Unable to acquire list of active addresses: %v", err)
 		return
 	}
 
