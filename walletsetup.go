@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"code.google.com/p/go.crypto/ssh/terminal"
+	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/conformal/btcec"
 	"github.com/conformal/btcutil"
