@@ -109,8 +109,11 @@ const (
 	// the account manager.
 	ErrAccountNotFound
 
-	// ErrDuplicate indicates that an address already exists.
-	ErrDuplicate
+	// ErrDuplicateAddress indicates an address already exists.
+	ErrDuplicateAddress
+
+	// ErrDuplicateAccount indicates an account already exists.
+	ErrDuplicateAccount
 
 	// ErrTooManyAddresses indicates that more than the maximum allowed number of
 	// addresses per account have been requested.
@@ -140,7 +143,8 @@ var errorCodeStrings = map[ErrorCode]string{
 	ErrInvalidAccount:    "ErrInvalidAccount",
 	ErrAddressNotFound:   "ErrAddressNotFound",
 	ErrAccountNotFound:   "ErrAccountNotFound",
-	ErrDuplicate:         "ErrDuplicate",
+	ErrDuplicateAddress:  "ErrDuplicateAddress",
+	ErrDuplicateAccount:  "ErrDuplicateAccount",
 	ErrTooManyAddresses:  "ErrTooManyAddresses",
 	ErrWrongPassphrase:   "ErrWrongPassphrase",
 	ErrWrongNet:          "ErrWrongNet",
