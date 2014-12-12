@@ -174,6 +174,49 @@ func (w *Wallet) updateNotificationLock() {
 	w.notificationLock = noopLocker{}
 }
 
+// GetCreditAccount returns the first account that can be associated
+// with the given credit.
+// If no account is found, ErrAccountNotFound is returned.
+func (w *Wallet) GetCreditAccount(c txstore.Credit) (uint32, error) {
+	_, addrs, _, _ := c.Addresses(activeNet.Params)
+	for _, a := range addrs {
+		managedAddr, err := w.Manager.Address(a)
+		if err != nil {
+			return 0, err
+		}
+		return managedAddr.Account(), nil
+	}
+	return 0, waddrmgr.ManagerError{
+		ErrorCode:   waddrmgr.ErrAccountNotFound,
+		Description: "account not found",
+	}
+}
+
+// GetDebitAccount returns the first account that can be associated
+// with the given debits.
+// If no account is found, ErrAccountNotFound is returned.
+func (w *Wallet) GetDebitAccount(d txstore.Debits) (uint32, error) {
+	msgTx := d.Tx().MsgTx()
+	for _, txIn := range msgTx.TxIn {
+		op := txIn.PreviousOutPoint
+		record, ok := w.TxRecord(&op.Hash)
+		if !ok {
+			return 0, btcjson.ErrNoTxInfo
+		}
+		for _, c := range record.Credits() {
+			account, err := w.GetCreditAccount(c)
+			if err != nil {
+				return 0, err
+			}
+			return account, nil
+		}
+	}
+	return 0, waddrmgr.ManagerError{
+		ErrorCode:   waddrmgr.ErrAccountNotFound,
+		Description: "account not found",
+	}
+}
+
 // ListenConnectedBlocks returns a channel that passes all blocks that a wallet
 // has been marked in sync with. The channel must be read, or other wallet
 // methods will block.
@@ -441,6 +484,7 @@ func (w *Wallet) syncWithChain() (err error) {
 
 type (
 	createTxRequest struct {
+		account uint32
 		pairs   map[string]btcutil.Amount
 		minconf int
 		resp    chan createTxResponse
@@ -466,7 +510,7 @@ out:
 	for {
 		select {
 		case txr := <-w.createTxRequests:
-			tx, err := w.txToPairs(txr.pairs, txr.minconf)
+			tx, err := w.txToPairs(txr.pairs, txr.account, txr.minconf)
 			txr.resp <- createTxResponse{tx, err}
 
 		case <-w.quit:
@@ -476,10 +520,11 @@ out:
 	w.wg.Done()
 }
 
-func (w *Wallet) CreateSimpleTx(pairs map[string]btcutil.Amount,
+func (w *Wallet) CreateSimpleTx(account uint32, pairs map[string]btcutil.Amount,
 	minconf int) (*CreatedTx, error) {
 
 	req := createTxRequest{
+		account: account,
 		pairs:   pairs,
 		minconf: minconf,
 		resp:    make(chan createTxResponse),
@@ -697,6 +742,22 @@ func (w *Wallet) AddressUsed(addr waddrmgr.ManagedAddress) bool {
 	return false
 }
 
+// AccountUsed returns whether there are any recorded transactions spending to
+// a given account. It returns true if atleast one address in the account was used
+// and false if no address in the account was used.
+func (w *Wallet) AccountUsed(account uint32) (bool, error) {
+	addrs, err := w.Manager.ActiveAccountAddresses(account)
+	if err != nil {
+		return false, err
+	}
+	for _, addr := range addrs {
+		if w.AddressUsed(addr) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // CalculateBalance sums the amounts of all unspent transaction
 // outputs to addresses of a wallet and returns the balance.
 //
@@ -714,19 +775,55 @@ func (w *Wallet) CalculateBalance(confirms int) (btcutil.Amount, error) {
 	return w.TxStore.Balance(confirms, bs.Height)
 }
 
+// CalculateAccountBalance sums the amounts of all unspent transaction
+// outputs to the given account of a wallet and returns the balance.
+func (w *Wallet) CalculateAccountBalance(account uint32, confirms int) (btcutil.Amount, error) {
+	var bal btcutil.Amount
+
+	// Get current block.  The block height used for calculating
+	// the number of tx confirmations.
+	bs, err := w.SyncedChainTip()
+	if err != nil {
+		return bal, err
+	}
+
+	for _, r := range w.TxStore.Records() {
+		for i, c := range r.Credits() {
+			if c.IsCoinbase() {
+				if !c.Confirmed(btcchain.CoinbaseMaturity, bs.Height) {
+					continue
+				}
+			}
+			if !c.Spent() {
+				if c.Confirmed(confirms, bs.Height) {
+					creditAccount, err := w.GetCreditAccount(c)
+					if err != nil {
+						continue
+					}
+					if creditAccount == account {
+						v := r.Tx().MsgTx().TxOut[i].Value
+						bal += btcutil.Amount(v)
+					}
+				}
+			}
+		}
+	}
+	return bal, nil
+}
+
 // CurrentAddress gets the most recently requested Bitcoin payment address
 // from a wallet.  If the address has already been used (there is at least
 // one transaction spending to it in the blockchain or btcd mempool), the next
 // chained address is returned.
-func (w *Wallet) CurrentAddress() (btcutil.Address, error) {
-	addr, err := w.Manager.LastExternalAddress(0)
+func (w *Wallet) CurrentAddress(account uint32) (btcutil.Address, error) {
+	addr, err := w.Manager.LastExternalAddress(account)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get next chained address if the last one has already been used.
 	if w.AddressUsed(addr) {
-		return w.NewAddress()
+		return w.NewAddress(account)
 	}
 
 	return addr.Address(), nil
@@ -752,12 +849,115 @@ func (w *Wallet) ListSinceBlock(since, curBlockHeight int32,
 			continue
 		}
 
-		jsonResults, err := txRecord.ToJSON("", curBlockHeight,
-			w.Manager.Net())
-		if err != nil {
-			return nil, err
+		for _, c := range txRecord.Credits() {
+			creditAccount, err := w.GetCreditAccount(c)
+			if err != nil {
+				continue
+			}
+			acctName, err := w.Manager.AccountName(creditAccount)
+			if err != nil {
+				continue
+			}
+			jsonResult, err := c.ToJSON(acctName, curBlockHeight,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResult)
 		}
-		txList = append(txList, jsonResults...)
+		if debits, err := txRecord.Debits(); err == nil {
+			debitAccount, err := w.GetDebitAccount(debits)
+			if err != nil {
+				continue
+			}
+			acctName, err := w.Manager.AccountName(debitAccount)
+			if err != nil {
+				continue
+			}
+			jsonResults, err := debits.ToJSON(acctName, curBlockHeight,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResults...)
+		}
+	}
+
+	return txList, nil
+}
+
+// ListAccountTransactions returns a slice of objects with details about a recorded
+// transaction.  This is intended to be used for listtransactions RPC
+// replies.
+func (w *Wallet) ListAccountTransactions(account uint32, from, count int) ([]btcjson.ListTransactionsResult, error) {
+	txList := []btcjson.ListTransactionsResult{}
+
+	// Get current block.  The block height used for calculating
+	// the number of tx confirmations.
+	bs, err := w.SyncedChainTip()
+	if err != nil {
+		return txList, err
+	}
+
+	acctName, err := w.Manager.AccountName(account)
+	if err != nil {
+		return txList, err
+	}
+
+	records := w.TxStore.Records()
+	// Search in reverse order: lookup most recently-added first.
+out:
+	for i := len(records) - 1; i >= 0; i-- {
+		for _, c := range records[i].Credits() {
+			// Filter account credits
+			creditAccount, err := w.GetCreditAccount(c)
+			if err != nil {
+				continue
+			}
+			if creditAccount != account {
+				continue
+			}
+			// Skip first 'from' results
+			if from > 0 {
+				from--
+				continue
+			}
+			jsonResult, err := c.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResult)
+			if len(txList) >= count {
+				break out
+			}
+		}
+		if debits, err := records[i].Debits(); err == nil {
+			// Filter account debits
+			debitAccount, err := w.GetDebitAccount(debits)
+			if err != nil {
+				continue
+			}
+			if debitAccount != account {
+				continue
+			}
+			// Skip first 'from' results
+			if from > 0 {
+				from--
+				continue
+			}
+			// TODO(tuxcanfly): multiple vouts in debit tx can
+			// lead to results greater than the required count
+			jsonResults, err := debits.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResults...)
+			if len(txList) >= count {
+				break out
+			}
+		}
 	}
 
 	return txList, nil
@@ -780,12 +980,38 @@ func (w *Wallet) ListTransactions(from, count int) ([]btcjson.ListTransactionsRe
 	lastLookupIdx := len(records) - count
 	// Search in reverse order: lookup most recently-added first.
 	for i := len(records) - 1; i >= from && i >= lastLookupIdx; i-- {
-		jsonResults, err := records[i].ToJSON("", bs.Height,
-			w.Manager.Net())
-		if err != nil {
-			return nil, err
+		for _, c := range records[i].Credits() {
+			creditAccount, err := w.GetCreditAccount(c)
+			if err != nil {
+				continue
+			}
+			acctName, err := w.Manager.AccountName(creditAccount)
+			if err != nil {
+				continue
+			}
+			jsonResult, err := c.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResult)
 		}
-		txList = append(txList, jsonResults...)
+		if debits, err := records[i].Debits(); err == nil {
+			debitAccount, err := w.GetDebitAccount(debits)
+			if err != nil {
+				continue
+			}
+			acctName, err := w.Manager.AccountName(debitAccount)
+			if err != nil {
+				continue
+			}
+			jsonResults, err := debits.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResults...)
+		}
 	}
 
 	return txList, nil
@@ -818,16 +1044,80 @@ func (w *Wallet) ListAddressTransactions(pkHashes map[string]struct{}) (
 			if !ok {
 				continue
 			}
+			managedAddr, err := w.Manager.Address(apkh)
+			if err != nil {
+				return nil, err
+			}
+			acctName, err := w.Manager.AccountName(managedAddr.Account())
+			if err != nil {
+				return nil, err
+			}
 
 			if _, ok := pkHashes[string(apkh.ScriptAddress())]; !ok {
 				continue
 			}
-			jsonResult, err := c.ToJSON("", bs.Height,
+			jsonResult, err := c.ToJSON(acctName, bs.Height,
 				w.Manager.Net())
 			if err != nil {
-				return nil, err
+				return txList, err
 			}
 			txList = append(txList, jsonResult)
+		}
+	}
+
+	return txList, nil
+}
+
+// ListAllAccountTransactions returns a slice of objects with details about a recorded
+// transaction.  This is intended to be used for listalltransactions RPC
+// replies.
+func (w *Wallet) ListAllAccountTransactions(account uint32) ([]btcjson.ListTransactionsResult, error) {
+	txList := []btcjson.ListTransactionsResult{}
+
+	// Get current block.  The block height used for calculating
+	// the number of tx confirmations.
+	bs, err := w.SyncedChainTip()
+	if err != nil {
+		return txList, err
+	}
+
+	acctName, err := w.Manager.AccountName(account)
+	if err != nil {
+		return txList, err
+	}
+
+	records := w.TxStore.Records()
+	// Search in reverse order: lookup most recently-added first.
+	for i := len(records) - 1; i >= 0; i-- {
+		for _, c := range records[i].Credits() {
+			creditAccount, err := w.GetCreditAccount(c)
+			if err != nil {
+				continue
+			}
+			if creditAccount != account {
+				continue
+			}
+			jsonResult, err := c.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResult)
+		}
+		if debits, err := records[i].Debits(); err == nil {
+			debitAccount, err := w.GetDebitAccount(debits)
+			if err != nil {
+				continue
+			}
+			if debitAccount != account {
+				continue
+			}
+			jsonResults, err := debits.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResults...)
 		}
 	}
 
@@ -850,12 +1140,38 @@ func (w *Wallet) ListAllTransactions() ([]btcjson.ListTransactionsResult, error)
 	// Search in reverse order: lookup most recently-added first.
 	records := w.TxStore.Records()
 	for i := len(records) - 1; i >= 0; i-- {
-		jsonResults, err := records[i].ToJSON("", bs.Height,
-			w.Manager.Net())
-		if err != nil {
-			return nil, err
+		for _, c := range records[i].Credits() {
+			creditAccount, err := w.GetCreditAccount(c)
+			if err != nil {
+				continue
+			}
+			acctName, err := w.Manager.AccountName(creditAccount)
+			if err != nil {
+				continue
+			}
+			jsonResult, err := c.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResult)
 		}
-		txList = append(txList, jsonResults...)
+		if debits, err := records[i].Debits(); err == nil {
+			debitAccount, err := w.GetDebitAccount(debits)
+			if err != nil {
+				continue
+			}
+			acctName, err := w.Manager.AccountName(debitAccount)
+			if err != nil {
+				continue
+			}
+			jsonResults, err := debits.ToJSON(acctName, bs.Height,
+				w.Manager.Net())
+			if err != nil {
+				return txList, err
+			}
+			txList = append(txList, jsonResults...)
+		}
 	}
 
 	return txList, nil
@@ -1161,7 +1477,7 @@ func (w *Wallet) Track() {
 	// TODO: return as slice? (doesn't have to be ordered)
 	addrs, err := w.Manager.AllActiveAddresses()
 	if err != nil {
-		log.Error("Unable to acquire list of active addresses: %v", err)
+		log.Errorf("Unable to acquire list of active addresses: %v", err)
 		return
 	}
 
@@ -1195,6 +1511,22 @@ func (w *Wallet) ResendUnminedTxs() {
 	}
 }
 
+// SortedActiveAccountAddresses returns a slice of addresses of an account in a wallet.
+func (w *Wallet) SortedActiveAccountAddresses(account uint32) ([]string, error) {
+	addrs, err := w.Manager.ActiveAccountAddresses(account)
+	if err != nil {
+		return nil, err
+	}
+
+	addrStrs := make([]string, len(addrs))
+	for i, addr := range addrs {
+		addrStrs[i] = addr.Address().EncodeAddress()
+	}
+
+	sort.Sort(sort.StringSlice(addrStrs))
+	return addrStrs, nil
+}
+
 // SortedActivePaymentAddresses returns a slice of all active payment
 // addresses in a wallet.
 func (w *Wallet) SortedActivePaymentAddresses() ([]string, error) {
@@ -1213,9 +1545,8 @@ func (w *Wallet) SortedActivePaymentAddresses() ([]string, error) {
 }
 
 // NewAddress returns the next external chained address for a wallet.
-func (w *Wallet) NewAddress() (btcutil.Address, error) {
+func (w *Wallet) NewAddress(account uint32) (btcutil.Address, error) {
 	// Get next address from wallet.
-	account := uint32(0)
 	addrs, err := w.Manager.NextExternalAddresses(account, 1)
 	if err != nil {
 		return nil, err
@@ -1234,9 +1565,8 @@ func (w *Wallet) NewAddress() (btcutil.Address, error) {
 }
 
 // NewChangeAddress returns a new change address for a wallet.
-func (w *Wallet) NewChangeAddress() (btcutil.Address, error) {
-	// Get next chained change address from wallet for account 0.
-	account := uint32(0)
+func (w *Wallet) NewChangeAddress(account uint32) (btcutil.Address, error) {
+	// Get next chained change address from wallet for account.
 	addrs, err := w.Manager.NextInternalAddresses(account, 1)
 	if err != nil {
 		return nil, err
@@ -1296,6 +1626,39 @@ func (w *Wallet) TotalReceived(confirms int) (btcutil.Amount, error) {
 		}
 	}
 	return amount, nil
+}
+
+// TotalReceivedForAccount iterates through a wallet's transaction history,
+// returning the total amount of bitcoins received for a single wallet
+// account.
+func (w *Wallet) TotalReceivedForAccount(account uint32, confirms int) (btcutil.Amount, uint64, error) {
+	bs, err := w.SyncedChainTip()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// Number of confirmations of the last transaction.
+	var confirmations uint64
+
+	var amount btcutil.Amount
+	for _, r := range w.TxStore.Records() {
+		for _, c := range r.Credits() {
+			if !c.Confirmed(confirms, bs.Height) {
+				continue
+			}
+			creditAccount, err := w.GetCreditAccount(c)
+			if err != nil {
+				continue
+			}
+			if creditAccount == account {
+				amount += c.Amount()
+				confirmations = uint64(c.Confirmations(bs.Height))
+				break
+			}
+		}
+	}
+
+	return amount, confirmations, nil
 }
 
 // TotalReceivedForAddr iterates through a wallet's transaction history,
