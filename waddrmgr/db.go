@@ -1245,8 +1245,8 @@ func fetchAddrAccount(tx walletdb.Tx, addressID []byte) (uint32, error) {
 	addrHash := fastsha256.Sum256(addressID)
 	val := bucket.Get(addrHash[:])
 	if val == nil {
-		str := "account not found"
-		return 0, managerError(ErrAccountNotFound, str, nil)
+		str := "address not found"
+		return 0, managerError(ErrAddressNotFound, str, nil)
 	}
 	return binary.LittleEndian.Uint32(val), nil
 }
