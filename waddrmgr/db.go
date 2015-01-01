@@ -17,7 +17,6 @@
 package waddrmgr
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"time"
@@ -30,6 +29,10 @@ import (
 const (
 	// LatestMgrVersion is the most recent manager version.
 	LatestMgrVersion = 1
+)
+
+var (
+	nullVal = []byte{0}
 )
 
 // maybeConvertDbError converts the passed error to a ManagerError with an
@@ -150,6 +153,12 @@ var (
 	// The index needs to be updated whenever the account name
 	// and id changes e.g. RenameAccount
 	acctNameIdxBucketName = []byte("acctnameidx")
+	// acctIdIdxBucketName is used to create an index
+	// mapping an account id to the corresponding
+	// account name string.
+	// The index needs to be updated whenever the account name
+	// and id changes e.g. RenameAccount
+	acctIdIdxBucketName = []byte("acctididx")
 
 	mainBucketName = []byte("main")
 	syncBucketName = []byte("sync")
@@ -510,9 +519,10 @@ func serializeBIP0044AccountRow(encryptedPubKey,
 // The returned value is a slice of account numbers which can be used to load
 // the respective account rows.
 func fetchAllAccounts(tx walletdb.Tx) ([]uint32, error) {
-	accounts := []uint32{}
-
 	bucket := tx.RootBucket().Bucket(acctBucketName)
+
+	// TODO: load the number of accounts and create a accounts slice of same length
+	accounts := []uint32{}
 
 	err := bucket.ForEach(func(k, v []byte) error {
 		// Skip buckets.
@@ -541,22 +551,17 @@ func fetchLastAccount(tx walletdb.Tx) (uint32, error) {
 // fetchAccountName retreives the account name given an account number from
 // the database.
 func fetchAccountName(tx walletdb.Tx, account uint32) (string, error) {
-	bucket := tx.RootBucket().Bucket(acctNameIdxBucketName)
+	bucket := tx.RootBucket().Bucket(acctIdIdxBucketName)
 
+	val := bucket.Get(uint32ToBytes(account))
+	if val == nil {
+		str := "account name not found"
+		return "", managerError(ErrAccountNotFound, str, nil)
+	}
 	offset := uint32(0)
-	var acctName string
-	bucket.ForEach(func(k, v []byte) error {
-		// Skip buckets.
-		if v == nil {
-			return nil
-		}
-		if bytes.Equal(v, uint32ToBytes(account)) {
-			nameLen := binary.LittleEndian.Uint32(k[offset : offset+4])
-			offset += 4
-			acctName = string(k[offset : offset+nameLen])
-		}
-		return nil
-	})
+	nameLen := binary.LittleEndian.Uint32(val[offset : offset+4])
+	offset += 4
+	acctName := string(val[offset : offset+nameLen])
 	return acctName, nil
 }
 
@@ -613,6 +618,19 @@ func deleteAccountNameIndex(tx walletdb.Tx, name string) error {
 	return nil
 }
 
+// deleteAccounIdIndex deletes the given key from the account id index of the database.
+func deleteAccountIdIndex(tx walletdb.Tx, account uint32) error {
+	bucket := tx.RootBucket().Bucket(acctIdIdxBucketName)
+
+	// Delete the account id key
+	err := bucket.Delete(uint32ToBytes(account))
+	if err != nil {
+		str := fmt.Sprintf("failed to delete account id index key %d", account)
+		return managerError(ErrDatabase, str, err)
+	}
+	return nil
+}
+
 // putAccountNameIndex stores the given key to the account name index of the database.
 func putAccountNameIndex(tx walletdb.Tx, account uint32, name string) error {
 	bucket := tx.RootBucket().Bucket(acctNameIdxBucketName)
@@ -621,6 +639,19 @@ func putAccountNameIndex(tx walletdb.Tx, account uint32, name string) error {
 	err := bucket.Put(stringToBytes(name), uint32ToBytes(account))
 	if err != nil {
 		str := fmt.Sprintf("failed to store account name index key %s", name)
+		return managerError(ErrDatabase, str, err)
+	}
+	return nil
+}
+
+// putAccountIdIndex stores the given key to the account id index of the database.
+func putAccountIdIndex(tx walletdb.Tx, account uint32, name string) error {
+	bucket := tx.RootBucket().Bucket(acctIdIdxBucketName)
+
+	// Write the account number keyed by the account id.
+	err := bucket.Put(uint32ToBytes(account), stringToBytes(name))
+	if err != nil {
+		str := fmt.Sprintf("failed to store account id index key %s", name)
 		return managerError(ErrDatabase, str, err)
 	}
 	return nil
@@ -635,7 +666,7 @@ func putAddrAccountIndex(tx walletdb.Tx, account uint32, addrHash []byte) error 
 	}
 
 	// Write a null value keyed by the address hash
-	err = bucket.Put(addrHash, []byte{0})
+	err = bucket.Put(addrHash, nullVal)
 	if err != nil {
 		str := fmt.Sprintf("failed to store address account index key %s", addrHash)
 		return managerError(ErrDatabase, str, err)
@@ -669,12 +700,18 @@ func putAccountInfo(tx walletdb.Tx, account uint32, encryptedPubKey,
 		acctType: actBIP0044,
 		rawData:  rawData,
 	}
-	err := putAccountRow(tx, account, &acctRow)
-	if err != nil {
+	if err := putAccountRow(tx, account, &acctRow); err != nil {
+		return err
+	}
+	// Update account id index
+	if err := putAccountIdIndex(tx, account, name); err != nil {
 		return err
 	}
 	// Update account name index
-	return putAccountNameIndex(tx, account, name)
+	if err := putAccountNameIndex(tx, account, name); err != nil {
+		return err
+	}
+	return nil
 }
 
 // fetchAddressRow loads address information for the provided address id from
@@ -1441,6 +1478,12 @@ func upgradeManager(namespace walletdb.Namespace) error {
 		_, err = rootBucket.CreateBucketIfNotExists(acctNameIdxBucketName)
 		if err != nil {
 			str := "failed to create account name index bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		_, err = rootBucket.CreateBucketIfNotExists(acctIdIdxBucketName)
+		if err != nil {
+			str := "failed to create account id index bucket"
 			return managerError(ErrDatabase, str, err)
 		}
 

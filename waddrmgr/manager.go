@@ -1485,12 +1485,36 @@ func (m *Manager) LastInternalAddress(account uint32) (ManagedAddress, error) {
 	return acctInfo.lastInternalAddr, nil
 }
 
+// ValidateAccountName validates the given account name and returns an error, if any.
+func ValidateAccountName(name string) error {
+	if name == "" {
+		str := "invalid account name, cannot be blank"
+		return managerError(ErrInvalidAccount, str, nil)
+	}
+	if name == "*" {
+		str := "invalid account name, cannot be '*'"
+		return managerError(ErrInvalidAccount, str, nil)
+	}
+	return nil
+}
+
 // NewAccount creates and returns a new account stored in the manager based
 // on the given account name.  If an account with the same name already exists,
 // ErrDuplicateAccount will be returned.  Since creating a new account requires
 // access to the cointype keys (from which extended account keys are derived),
 // it requires the manager to be unlocked.
 func (m *Manager) NewAccount(name string) (uint32, error) {
+	if m.watchingOnly {
+		return 0, managerError(ErrWatchingOnly, errWatchingOnly, nil)
+	}
+
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	if m.locked {
+		return 0, managerError(ErrLocked, errLocked, nil)
+	}
+
 	var account uint32
 	var coinTypePrivEnc []byte
 
@@ -1514,9 +1538,9 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 		if err != nil {
 			return err
 		}
-		// TODO: needs to be atomic?
 		account++
-		// Fetch the cointype key which will be used to derive the next account extended keys
+		// Fetch the cointype key which will be used to derive the next account
+		// extended keys
 		_, coinTypePrivEnc, err = fetchCoinTypeKeys(tx)
 		if err != nil {
 			return err
@@ -1536,9 +1560,13 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 
 		// Derive the account key using the cointype key
 		acctKeyPriv, err := deriveAccountKey(coinTypeKeyPriv, account)
-		acctKeyPub, err := acctKeyPriv.Neuter()
 		if err != nil {
 			str := "failed to convert private key for account"
+			return managerError(ErrKeyChain, str, err)
+		}
+		acctKeyPub, err := acctKeyPriv.Neuter()
+		if err != nil {
+			str := "failed to convert public key for account"
 			return managerError(ErrKeyChain, str, err)
 		}
 		// Encrypt the default account keys with the associated crypto keys.
@@ -1552,9 +1580,9 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 			str := "failed to encrypt private key for account"
 			return managerError(ErrCrypto, str, err)
 		}
-		// We have the encrypted account extended keys, so save them to the database
-		return putAccountInfo(tx, account, acctPubEnc,
-			acctPrivEnc, 0, 0, name)
+		// We have the encrypted account extended keys, so save them to the
+		// database
+		return putAccountInfo(tx, account, acctPubEnc, acctPrivEnc, 0, 0, name)
 	})
 	return account, err
 }
@@ -1563,6 +1591,9 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 // given account number with the given name.  If an account with the same name
 // already exists, ErrDuplicateAccount will be returned.
 func (m *Manager) RenameAccount(account uint32, name string) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
 	// Check that account with the new name does not exist
 	_, err := m.LookupAccount(name)
 	if err == nil {
@@ -1582,9 +1613,12 @@ func (m *Manager) RenameAccount(account uint32, name string) error {
 			str := fmt.Sprintf("unsupported account type %T", row)
 			err = managerError(ErrDatabase, str, nil)
 		}
+		// Remove the old name key from the accout id index
+		if err = deleteAccountIdIndex(tx, account); err != nil {
+			return err
+		}
 		// Remove the old name key from the accout name index
-		err = deleteAccountNameIndex(tx, row.name)
-		if err != nil {
+		if err = deleteAccountNameIndex(tx, row.name); err != nil {
 			return err
 		}
 		err = putAccountInfo(tx, account, row.pubKeyEncrypted,
@@ -1597,6 +1631,9 @@ func (m *Manager) RenameAccount(account uint32, name string) error {
 // AccountName returns the account name for the given account number
 // stored in the manager.
 func (m *Manager) AccountName(account uint32) (string, error) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
 	var acctName string
 	err := m.namespace.View(func(tx walletdb.Tx) error {
 		var err error
@@ -1612,6 +1649,9 @@ func (m *Manager) AccountName(account uint32) (string, error) {
 
 // AllAccounts returns a slice of all the accounts stored in the manager.
 func (m *Manager) AllAccounts() ([]uint32, error) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
 	var accounts []uint32
 	err := m.namespace.View(func(tx walletdb.Tx) error {
 		var err error
@@ -1627,6 +1667,9 @@ func (m *Manager) AllAccounts() ([]uint32, error) {
 
 // LastAccount returns the last account stored in the manager.
 func (m *Manager) LastAccount() (uint32, error) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
 	var account uint32
 	err := m.namespace.View(func(tx walletdb.Tx) error {
 		var err error
@@ -1859,19 +1902,6 @@ func checkBranchKeys(acctKey *hdkeychain.ExtendedKey) error {
 	// Derive the external branch as the second child of the account key.
 	_, err := acctKey.Child(internalBranch)
 	return err
-}
-
-// ValidateAccountName validates the given account name and returns an error, if any.
-func ValidateAccountName(name string) error {
-	if name == "" {
-		str := "invalid account name, cannot be blank"
-		return managerError(ErrInvalidAccount, str, nil)
-	}
-	if name == "*" {
-		str := "invalid account name, cannot be '*'"
-		return managerError(ErrInvalidAccount, str, nil)
-	}
-	return nil
 }
 
 // loadManager returns a new address manager that results from loading it from
