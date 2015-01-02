@@ -1144,6 +1144,10 @@ func (m *Manager) LookupAccount(name string) (uint32, error) {
 	m.mtx.RLock()
 	defer m.mtx.RUnlock()
 
+	return m.lookupAccount(name)
+}
+
+func (m *Manager) lookupAccount(name string) (uint32, error) {
 	var account uint32
 	err := m.namespace.View(func(tx walletdb.Tx) error {
 		var err error
@@ -1524,7 +1528,7 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 	}
 
 	// Check that account with the same name does not exist
-	_, err := m.LookupAccount(name)
+	_, err := m.lookupAccount(name)
 	if err == nil {
 		str := fmt.Sprintf("account with the same name already exists")
 		return account, managerError(ErrDuplicateAccount, str, err)
@@ -1582,7 +1586,14 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 		}
 		// We have the encrypted account extended keys, so save them to the
 		// database
-		return putAccountInfo(tx, account, acctPubEnc, acctPrivEnc, 0, 0, name)
+		err = putAccountInfo(tx, account, acctPubEnc, acctPrivEnc, 0, 0, name)
+		if err != nil {
+			return err
+		}
+		if err := putLastAccount(tx, account); err != nil {
+			return err
+		}
+		return putNumAccounts(tx, 1)
 	})
 	return account, err
 }
@@ -1595,7 +1606,7 @@ func (m *Manager) RenameAccount(account uint32, name string) error {
 	defer m.mtx.Unlock()
 
 	// Check that account with the new name does not exist
-	_, err := m.LookupAccount(name)
+	_, err := m.lookupAccount(name)
 	if err == nil {
 		str := fmt.Sprintf("account with the same name already exists")
 		return managerError(ErrDuplicateAccount, str, err)
@@ -2255,6 +2266,14 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 		// Save the initial recent blocks state.
 		err = putRecentBlocks(tx, recentHeight, recentHashes)
 		if err != nil {
+			return err
+		}
+
+		// Save metadata - last account and number of all accounts
+		if err := putLastAccount(tx, DefaultAccountNum); err != nil {
+			return err
+		}
+		if err := putNumAccounts(tx, 1); err != nil {
 			return err
 		}
 

@@ -31,10 +31,6 @@ const (
 	LatestMgrVersion = 1
 )
 
-var (
-	nullVal = []byte{0}
-)
-
 // maybeConvertDbError converts the passed error to a ManagerError with an
 // error code of ErrDatabase if it is not already a ManagerError.  This is
 // useful for potential errors returned from managed transaction an other parts
@@ -133,6 +129,9 @@ type dbScriptAddressRow struct {
 
 // Key names for various database fields.
 var (
+	// nullVall is null byte used as a flag value in a bucket entry
+	nullVal = []byte{0}
+
 	// Bucket names.
 	acctBucketName = []byte("acct")
 	addrBucketName = []byte("addr")
@@ -153,12 +152,26 @@ var (
 	// The index needs to be updated whenever the account name
 	// and id changes e.g. RenameAccount
 	acctNameIdxBucketName = []byte("acctnameidx")
+
 	// acctIdIdxBucketName is used to create an index
 	// mapping an account id to the corresponding
 	// account name string.
 	// The index needs to be updated whenever the account name
 	// and id changes e.g. RenameAccount
 	acctIdIdxBucketName = []byte("acctididx")
+
+	// meta is used to store meta-data about the address manager
+	// for example: number of accounts, number of addresses, last
+	// account number
+	metaBucketName = []byte("meta")
+	// numAccountsName is used to store the metadata - number of
+	// all accounts in the manager
+	numAccountsName = []byte("numaccounts")
+	// lastAccountName is used to store the metadata - last account
+	// in the manager
+	lastAccountName  = []byte("lastaccount")
+	numAllAddrsName  = []byte("numalladdrs")
+	numAcctAddrsName = []byte("numacctaddrs")
 
 	mainBucketName = []byte("main")
 	syncBucketName = []byte("sync")
@@ -361,6 +374,64 @@ func fetchWatchingOnly(tx walletdb.Tx) (bool, error) {
 	return buf[0] != 0, nil
 }
 
+// fetchNumAllAddresses loads the metadata - number of all addrs - from the database.
+func fetchNumAllAddresses(tx walletdb.Tx) (uint32, error) {
+	bucket := tx.RootBucket().Bucket(metaBucketName)
+
+	val := bucket.Get(numAllAddrsName)
+	// Return 0 if the metadata is uninitialized
+	if val == nil {
+		return 0, nil
+	}
+	if len(val) != 4 {
+		str := fmt.Sprintf("malformed metadata '%s' stored in database",
+			numAllAddrsName)
+		return 0, managerError(ErrDatabase, str, nil)
+	}
+	n := binary.LittleEndian.Uint32(val[0:4])
+	return n, nil
+}
+
+// fetchNumAccountAddrs loads the metadata - number of account addrs - from the database.
+func fetchNumAccountAddrs(tx walletdb.Tx, account uint32) (uint32, error) {
+	bucket := tx.RootBucket().Bucket(metaBucketName).Bucket(uint32ToBytes(account))
+	// Return 0 if bucket is uninitialized
+	if bucket == nil {
+		return 0, nil
+	}
+
+	val := bucket.Get(numAcctAddrsName)
+	// Return 0 if the metadata is uninitialized
+	if val == nil {
+		return 0, nil
+	}
+	if len(val) != 4 {
+		str := fmt.Sprintf("malformed metadata '%s' stored in database",
+			numAcctAddrsName)
+		return 0, managerError(ErrDatabase, str, nil)
+	}
+	n := binary.LittleEndian.Uint32(val[0:4])
+	return n, nil
+}
+
+// fetchNumAccounts loads the metadata - number of all accounts - from the database.
+func fetchNumAccounts(tx walletdb.Tx) (uint32, error) {
+	bucket := tx.RootBucket().Bucket(metaBucketName)
+
+	val := bucket.Get(numAccountsName)
+	// Return 0 if the metadata is uninitialized
+	if val == nil {
+		return 0, nil
+	}
+	if len(val) != 4 {
+		str := fmt.Sprintf("malformed metadata '%s' stored in database",
+			numAccountsName)
+		return 0, managerError(ErrDatabase, str, nil)
+	}
+	n := binary.LittleEndian.Uint32(val[0:4])
+	return n, nil
+}
+
 // putWatchingOnly stores the watching-only flag to the database.
 func putWatchingOnly(tx walletdb.Tx, watchingOnly bool) error {
 	bucket := tx.RootBucket().Bucket(mainBucketName)
@@ -521,30 +592,41 @@ func serializeBIP0044AccountRow(encryptedPubKey,
 func fetchAllAccounts(tx walletdb.Tx) ([]uint32, error) {
 	bucket := tx.RootBucket().Bucket(acctBucketName)
 
-	// TODO: load the number of accounts and create a accounts slice of same length
-	accounts := []uint32{}
+	numAccounts, err := fetchNumAccounts(tx)
+	if err != nil {
+		return []uint32{}, err
+	}
 
-	err := bucket.ForEach(func(k, v []byte) error {
+	var accounts = make([]uint32, numAccounts)
+	i := 0
+	err = bucket.ForEach(func(k, v []byte) error {
 		// Skip buckets.
 		if v == nil {
 			return nil
 		}
-		accounts = append(accounts, binary.LittleEndian.Uint32(k))
+		// Handle index out of range due to invalid metadata
+		if i > len(accounts)-1 {
+			str := "inconsistent account data stored in database"
+			return managerError(ErrDatabase, str, nil)
+		}
+		accounts[i] = binary.LittleEndian.Uint32(k)
+		i++
 		return nil
 	})
 	return accounts, err
 }
 
 // fetchLastAccount retreives the last account from the database.
-// TODO: optimize this by having walletdb call cursor.Last() instead of
-// iterating over all entries
 func fetchLastAccount(tx walletdb.Tx) (uint32, error) {
-	var account uint32
-	accounts, err := fetchAllAccounts(tx)
-	if err != nil {
-		return account, err
+	bucket := tx.RootBucket().Bucket(metaBucketName)
+
+	val := bucket.Get(lastAccountName)
+	if len(val) != 4 {
+		str := fmt.Sprintf("malformed metadata '%s' stored in database",
+			lastAccountName)
+		return 0, managerError(ErrDatabase, str, nil)
 	}
-	account = accounts[len(accounts)-1]
+	account := binary.LittleEndian.Uint32(val[0:4])
 	return account, nil
 }
 
@@ -710,6 +792,75 @@ func putAccountInfo(tx walletdb.Tx, account uint32, encryptedPubKey,
 	// Update account name index
 	if err := putAccountNameIndex(tx, account, name); err != nil {
 		return err
+	}
+	return nil
+}
+
+// putNumAllAddrs stores the provided metadata - number of new addrs - to the database.
+func putNumAllAddrs(tx walletdb.Tx, count uint32) error {
+	bucket := tx.RootBucket().Bucket(metaBucketName)
+
+	n, err := fetchNumAllAddresses(tx)
+	if err != nil {
+		return err
+	}
+	n += count
+	err = bucket.Put(numAllAddrsName, uint32ToBytes(n))
+	if err != nil {
+		str := fmt.Sprintf("failed to update metadata '%s'", numAllAddrsName)
+		return managerError(ErrDatabase, str, err)
+	}
+	return nil
+}
+
+// putNumAccountAddrs stores the provided metadata - number of new account addrs - to the database.
+func putNumAccountAddrs(tx walletdb.Tx, account uint32, count uint32) error {
+	bucket := tx.RootBucket().Bucket(metaBucketName)
+
+	n, err := fetchNumAccountAddrs(tx, account)
+	if err != nil {
+		return err
+	}
+	n += count
+
+	acctBucket, err := bucket.CreateBucketIfNotExists(uint32ToBytes(account))
+	if err != nil {
+		str := "failed to create account meta bucket"
+		return managerError(ErrDatabase, str, err)
+	}
+	err = acctBucket.Put(numAcctAddrsName, uint32ToBytes(n))
+	if err != nil {
+		str := fmt.Sprintf("failed to update metadata '%s'", numAcctAddrsName)
+		return managerError(ErrDatabase, str, err)
+	}
+	return nil
+}
+
+// putNumAccounts stores the provided metadata - number of new accounts - to the database.
+func putNumAccounts(tx walletdb.Tx, count uint32) error {
+	bucket := tx.RootBucket().Bucket(metaBucketName)
+
+	n, err := fetchNumAccounts(tx)
+	if err != nil {
+		return err
+	}
+	n += count
+	err = bucket.Put(numAccountsName, uint32ToBytes(n))
+	if err != nil {
+		str := fmt.Sprintf("failed to update metadata '%s'", numAccountsName)
+		return managerError(ErrDatabase, str, err)
+	}
+	return nil
+}
+
+// putLastAccount stores the provided metadata - last account - to the database.
+func putLastAccount(tx walletdb.Tx, account uint32) error {
+	bucket := tx.RootBucket().Bucket(metaBucketName)
+
+	err := bucket.Put(lastAccountName, uint32ToBytes(account))
+	if err != nil {
+		str := fmt.Sprintf("failed to update metadata '%s'", lastAccountName)
+		return managerError(ErrDatabase, str, err)
 	}
 	return nil
 }
@@ -955,6 +1106,13 @@ func putAddress(tx walletdb.Tx, addressID []byte, row *dbAddressRow) error {
 		str := fmt.Sprintf("failed to store address %x", addressID)
 		return managerError(ErrDatabase, str, err)
 	}
+	// Update metadata
+	if err := putNumAllAddrs(tx, 1); err != nil {
+		return err
+	}
+	if err := putNumAccountAddrs(tx, row.account, 1); err != nil {
+		return err
+	}
 	// Update address account index
 	return putAddrAccountIndex(tx, row.account, addrHash[:])
 }
@@ -1063,17 +1221,24 @@ func existsAddress(tx walletdb.Tx, addressID []byte) bool {
 // The returned value is a slice address rows for each specific address type.
 // The caller should use type assertions to ascertain the types.
 func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error) {
-	var addrs []interface{}
-
 	bucket := tx.RootBucket().Bucket(addrBucketName)
+
 	accountBucket := tx.RootBucket().Bucket(addrAcctIdxBucketName).
 		Bucket(uint32ToBytes(account))
-	// if index bucket is missing the account, there hasn't been any address entries yet
+	// if index bucket is missing the account, there hasn't been any address
+	// entries yet
 	if accountBucket == nil {
-		return addrs, nil
+		return []interface{}{}, nil
 	}
 
-	err := accountBucket.ForEach(func(k, v []byte) error {
+	numAccountAddrs, err := fetchNumAccountAddrs(tx, account)
+	if err != nil {
+		return []interface{}{}, err
+	}
+
+	var addrs = make([]interface{}, numAccountAddrs)
+	i := 0
+	err = accountBucket.ForEach(func(k, v []byte) error {
 		serializedRow := bucket.Get(k)
 
 		// Deserialize the address row first to determine the field
@@ -1105,7 +1270,13 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 			return err
 		}
 
-		addrs = append(addrs, addrRow)
+		// Handle index out of range due to invalid metadata
+		if i > len(addrs)-1 {
+			str := "inconsistent address data stored in database"
+			return managerError(ErrDatabase, str, nil)
+		}
+		addrs[i] = addrRow
+		i++
 		return nil
 	})
 	if err != nil {
@@ -1121,8 +1292,14 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 func fetchAllAddresses(tx walletdb.Tx) ([]interface{}, error) {
 	bucket := tx.RootBucket().Bucket(addrBucketName)
 
-	var addrs []interface{}
-	err := bucket.ForEach(func(k, v []byte) error {
+	numAllAddrs, err := fetchNumAllAddresses(tx)
+	if err != nil {
+		return []interface{}{}, err
+	}
+
+	var addrs = make([]interface{}, numAllAddrs)
+	i := 0
+	err = bucket.ForEach(func(k, v []byte) error {
 		// Skip buckets.
 		if v == nil {
 			return nil
@@ -1152,7 +1329,13 @@ func fetchAllAddresses(tx walletdb.Tx) ([]interface{}, error) {
 			return err
 		}
 
-		addrs = append(addrs, addrRow)
+		// Handle index out of range due to invalid metadata
+		if i > len(addrs)-1 {
+			str := "inconsistent address data stored in database"
+			return managerError(ErrDatabase, str, nil)
+		}
+		addrs[i] = addrRow
+		i++
 		return nil
 	})
 	if err != nil {
@@ -1484,6 +1667,12 @@ func upgradeManager(namespace walletdb.Namespace) error {
 		_, err = rootBucket.CreateBucketIfNotExists(acctIdIdxBucketName)
 		if err != nil {
 			str := "failed to create account id index bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		_, err = rootBucket.CreateBucketIfNotExists(metaBucketName)
+		if err != nil {
+			str := "failed to create meta bucket"
 			return managerError(ErrDatabase, str, err)
 		}
 
