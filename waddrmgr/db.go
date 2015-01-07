@@ -136,14 +136,16 @@ var (
 	acctBucketName = []byte("acct")
 	addrBucketName = []byte("addr")
 
-	// addrAcctIdxBucketName is used to create an index
-	// to lookup addresses belonging to a given account.
-	// It contains a bucket keyed by the account id which
-	// in turn contains an entry for all the addrs belonging
-	// to the account keyed by the addr hash and containing
-	// a null value.
-	// The index needs to be updated whenever an address is
-	// created e.g. NewAddress
+	// addrAcctIdxBucketName is used to index account addresses
+	// Entries in this index may map:
+	// * addr hash => account id
+	// * account bucket -> addr hash => null
+	// To fetch the account of an address, lookup the value using
+	// the address hash.
+	// To fetch all addresses of an account, fetch the account bucket, iterate
+	// over the keys and fetch the address row from the addr bucket.
+	// The index needs to be updated whenever an address is created e.g.
+	// NewAddress
 	addrAcctIdxBucketName = []byte("addracctidx")
 
 	// acctNameIdxBucketName is used to create an index
@@ -741,13 +743,19 @@ func putAccountIdIndex(tx walletdb.Tx, account uint32, name string) error {
 
 // putAddrAccountIndex stores the given key to the address account index of the database.
 func putAddrAccountIndex(tx walletdb.Tx, account uint32, addrHash []byte) error {
-	bucket, err := tx.RootBucket().Bucket(addrAcctIdxBucketName).
-		CreateBucketIfNotExists(uint32ToBytes(account))
+	bucket := tx.RootBucket().Bucket(addrAcctIdxBucketName)
+
+	// Write account keyed by address hash
+	err := bucket.Put(addrHash, uint32ToBytes(account))
 	if err != nil {
 		return nil
 	}
 
-	// Write a null value keyed by the address hash
+	bucket, err = bucket.CreateBucketIfNotExists(uint32ToBytes(account))
+	if err != nil {
+		return err
+	}
+	// In account bucket, write a null value keyed by the address hash
 	err = bucket.Put(addrHash, nullVal)
 	if err != nil {
 		str := fmt.Sprintf("failed to store address account index key %s", addrHash)
@@ -1217,6 +1225,21 @@ func existsAddress(tx walletdb.Tx, addressID []byte) bool {
 	return bucket.Get(addrHash[:]) != nil
 }
 
+// fetchAddrAccount returns the account to which the given address belongs to.
+// It looks up the account using the addracctidx index which maps the address
+// hash to it's corresponding account id.
+func fetchAddrAccount(tx walletdb.Tx, addressID []byte) (uint32, error) {
+	bucket := tx.RootBucket().Bucket(addrAcctIdxBucketName)
+
+	addrHash := fastsha256.Sum256(addressID)
+	val := bucket.Get(addrHash[:])
+	if val == nil {
+		str := "account not found"
+		return 0, managerError(ErrAccountNotFound, str, nil)
+	}
+	return binary.LittleEndian.Uint32(val), nil
+}
+
 // fetchAccountAddresses loads information about addresses of an account from the database.
 // The returned value is a slice address rows for each specific address type.
 // The caller should use type assertions to ascertain the types.
@@ -1239,6 +1262,10 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 	var addrs = make([]interface{}, numAccountAddrs)
 	i := 0
 	err = accountBucket.ForEach(func(k, v []byte) error {
+		// Skip buckets.
+		if v == nil {
+			return nil
+		}
 		serializedRow := bucket.Get(k)
 
 		// Deserialize the address row first to determine the field

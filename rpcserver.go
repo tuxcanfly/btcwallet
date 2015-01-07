@@ -1765,13 +1765,13 @@ func GetAccount(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interface{
 		return nil, btcjson.ErrInvalidAddressOrKey
 	}
 
-	// If it is in the wallet, we consider it part of the default account.
-	managedAddr, err := w.Manager.Address(addr)
+	// Fetch the associated account
+	account, err := w.Manager.AddrAccount(addr)
 	if err != nil {
 		return nil, btcjson.ErrInvalidAddressOrKey
 	}
 
-	acctName, err := w.Manager.AccountName(managedAddr.Account())
+	acctName, err := w.Manager.AccountName(account)
 	if err != nil {
 		return nil, btcjson.ErrInvalidAddressOrKey
 	}
@@ -2220,12 +2220,12 @@ func ListReceivedByAddress(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) 
 			for _, address := range addresses {
 				addrStr := address.EncodeAddress()
 				addrData, ok := allAddrData[addrStr]
-				managedAddr, err := w.Manager.Address(address)
+				account, err := w.Manager.AddrAccount(address)
 				if err != nil {
 					return nil, btcjson.ErrInvalidAddressOrKey
 				}
 
-				acctName, err := w.Manager.AccountName(managedAddr.Account())
+				acctName, err := w.Manager.AccountName(account)
 				if err != nil {
 					return nil, btcjson.ErrInvalidAddressOrKey
 				}

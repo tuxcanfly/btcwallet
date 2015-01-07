@@ -637,6 +637,20 @@ func (m *Manager) Address(address btcutil.Address) (ManagedAddress, error) {
 	return m.loadAndCacheAddress(address)
 }
 
+// AddrAccount returns the account to which the given address belongs.
+func (m *Manager) AddrAccount(address btcutil.Address) (uint32, error) {
+	var account uint32
+	err := m.namespace.View(func(tx walletdb.Tx) error {
+		var err error
+		account, err = fetchAddrAccount(tx, address.ScriptAddress())
+		return err
+	})
+	if err != nil {
+		return 0, maybeConvertDbError(err)
+	}
+	return account, nil
+}
+
 // ChangePassphrase changes either the public or private passphrase to the
 // provided value depending on the private flag.  In order to change the private
 // password, the address manager must not be watching-only.

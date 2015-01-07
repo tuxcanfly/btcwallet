@@ -179,17 +179,8 @@ func (w *Wallet) updateNotificationLock() {
 // If no account is found, ErrAccountNotFound is returned.
 func (w *Wallet) GetCreditAccount(c txstore.Credit) (uint32, error) {
 	_, addrs, _, _ := c.Addresses(activeNet.Params)
-	for _, a := range addrs {
-		managedAddr, err := w.Manager.Address(a)
-		if err != nil {
-			return 0, err
-		}
-		return managedAddr.Account(), nil
-	}
-	return 0, waddrmgr.ManagerError{
-		ErrorCode:   waddrmgr.ErrAccountNotFound,
-		Description: "account not found",
-	}
+	addr := addrs[0]
+	return w.Manager.AddrAccount(addr)
 }
 
 // GetDebitAccount returns the first account that can be associated
@@ -1044,11 +1035,11 @@ func (w *Wallet) ListAddressTransactions(pkHashes map[string]struct{}) (
 			if !ok {
 				continue
 			}
-			managedAddr, err := w.Manager.Address(apkh)
+			account, err := w.Manager.AddrAccount(apkh)
 			if err != nil {
 				return nil, err
 			}
-			acctName, err := w.Manager.AccountName(managedAddr.Account())
+			acctName, err := w.Manager.AccountName(account)
 			if err != nil {
 				return nil, err
 			}
