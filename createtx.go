@@ -345,7 +345,7 @@ func (w *Wallet) findEligibleOutputs(account uint32, minconf int, bs *waddrmgr.B
 				continue
 			}
 
-			creditAccount, err := w.GetCreditAccount(unspent[i])
+			creditAccount, err := w.CreditAccount(unspent[i])
 			if err != nil {
 				continue
 			}

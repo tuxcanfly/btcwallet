@@ -174,19 +174,19 @@ func (w *Wallet) updateNotificationLock() {
 	w.notificationLock = noopLocker{}
 }
 
-// GetCreditAccount returns the first account that can be associated
+// CreditAccount returns the first account that can be associated
 // with the given credit.
 // If no account is found, ErrAccountNotFound is returned.
-func (w *Wallet) GetCreditAccount(c txstore.Credit) (uint32, error) {
+func (w *Wallet) CreditAccount(c txstore.Credit) (uint32, error) {
 	_, addrs, _, _ := c.Addresses(activeNet.Params)
 	addr := addrs[0]
 	return w.Manager.AddrAccount(addr)
 }
 
-// GetDebitAccount returns the first account that can be associated
+// DebitAccount returns the first account that can be associated
 // with the given debits.
 // If no account is found, ErrAccountNotFound is returned.
-func (w *Wallet) GetDebitAccount(d txstore.Debits) (uint32, error) {
+func (w *Wallet) DebitAccount(d txstore.Debits) (uint32, error) {
 	msgTx := d.Tx().MsgTx()
 	for _, txIn := range msgTx.TxIn {
 		op := txIn.PreviousOutPoint
@@ -195,7 +195,7 @@ func (w *Wallet) GetDebitAccount(d txstore.Debits) (uint32, error) {
 			return 0, btcjson.ErrNoTxInfo
 		}
 		for _, c := range record.Credits() {
-			account, err := w.GetCreditAccount(c)
+			account, err := w.CreditAccount(c)
 			if err != nil {
 				return 0, err
 			}
@@ -787,7 +787,7 @@ func (w *Wallet) CalculateAccountBalance(account uint32, confirms int) (btcutil.
 			}
 			if !c.Spent() {
 				if c.Confirmed(confirms, bs.Height) {
-					creditAccount, err := w.GetCreditAccount(c)
+					creditAccount, err := w.CreditAccount(c)
 					if err != nil {
 						continue
 					}
@@ -841,7 +841,7 @@ func (w *Wallet) ListSinceBlock(since, curBlockHeight int32,
 		}
 
 		for _, c := range txRecord.Credits() {
-			creditAccount, err := w.GetCreditAccount(c)
+			creditAccount, err := w.CreditAccount(c)
 			if err != nil {
 				continue
 			}
@@ -857,7 +857,7 @@ func (w *Wallet) ListSinceBlock(since, curBlockHeight int32,
 			txList = append(txList, jsonResult)
 		}
 		if debits, err := txRecord.Debits(); err == nil {
-			debitAccount, err := w.GetDebitAccount(debits)
+			debitAccount, err := w.DebitAccount(debits)
 			if err != nil {
 				continue
 			}
@@ -901,7 +901,7 @@ out:
 	for i := len(records) - 1; i >= 0; i-- {
 		for _, c := range records[i].Credits() {
 			// Filter account credits
-			creditAccount, err := w.GetCreditAccount(c)
+			creditAccount, err := w.CreditAccount(c)
 			if err != nil {
 				continue
 			}
@@ -925,7 +925,7 @@ out:
 		}
 		if debits, err := records[i].Debits(); err == nil {
 			// Filter account debits
-			debitAccount, err := w.GetDebitAccount(debits)
+			debitAccount, err := w.DebitAccount(debits)
 			if err != nil {
 				continue
 			}
@@ -972,7 +972,7 @@ func (w *Wallet) ListTransactions(from, count int) ([]btcjson.ListTransactionsRe
 	// Search in reverse order: lookup most recently-added first.
 	for i := len(records) - 1; i >= from && i >= lastLookupIdx; i-- {
 		for _, c := range records[i].Credits() {
-			creditAccount, err := w.GetCreditAccount(c)
+			creditAccount, err := w.CreditAccount(c)
 			if err != nil {
 				continue
 			}
@@ -988,7 +988,7 @@ func (w *Wallet) ListTransactions(from, count int) ([]btcjson.ListTransactionsRe
 			txList = append(txList, jsonResult)
 		}
 		if debits, err := records[i].Debits(); err == nil {
-			debitAccount, err := w.GetDebitAccount(debits)
+			debitAccount, err := w.DebitAccount(debits)
 			if err != nil {
 				continue
 			}
@@ -1081,7 +1081,7 @@ func (w *Wallet) ListAllAccountTransactions(account uint32) ([]btcjson.ListTrans
 	// Search in reverse order: lookup most recently-added first.
 	for i := len(records) - 1; i >= 0; i-- {
 		for _, c := range records[i].Credits() {
-			creditAccount, err := w.GetCreditAccount(c)
+			creditAccount, err := w.CreditAccount(c)
 			if err != nil {
 				continue
 			}
@@ -1096,7 +1096,7 @@ func (w *Wallet) ListAllAccountTransactions(account uint32) ([]btcjson.ListTrans
 			txList = append(txList, jsonResult)
 		}
 		if debits, err := records[i].Debits(); err == nil {
-			debitAccount, err := w.GetDebitAccount(debits)
+			debitAccount, err := w.DebitAccount(debits)
 			if err != nil {
 				continue
 			}
@@ -1132,7 +1132,7 @@ func (w *Wallet) ListAllTransactions() ([]btcjson.ListTransactionsResult, error)
 	records := w.TxStore.Records()
 	for i := len(records) - 1; i >= 0; i-- {
 		for _, c := range records[i].Credits() {
-			creditAccount, err := w.GetCreditAccount(c)
+			creditAccount, err := w.CreditAccount(c)
 			if err != nil {
 				continue
 			}
@@ -1148,7 +1148,7 @@ func (w *Wallet) ListAllTransactions() ([]btcjson.ListTransactionsResult, error)
 			txList = append(txList, jsonResult)
 		}
 		if debits, err := records[i].Debits(); err == nil {
-			debitAccount, err := w.GetDebitAccount(debits)
+			debitAccount, err := w.DebitAccount(debits)
 			if err != nil {
 				continue
 			}
@@ -1637,7 +1637,7 @@ func (w *Wallet) TotalReceivedForAccount(account uint32, confirms int) (btcutil.
 			if !c.Confirmed(confirms, bs.Height) {
 				continue
 			}
-			creditAccount, err := w.GetCreditAccount(c)
+			creditAccount, err := w.CreditAccount(c)
 			if err != nil {
 				continue
 			}
