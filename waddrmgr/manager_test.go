@@ -1120,9 +1120,22 @@ func testChangePassphrase(tc *testContext) bool {
 // testNewAccount tests the new account creation func of the address manager works
 // as expected.
 func testNewAccount(tc *testContext) bool {
-	// Cannot create new accounts in watching-only mode
 	if tc.watchingOnly {
+		// Creating new accounts in watching-only mode should return ErrWatchingOnly
+		_, err := tc.manager.NewAccount("test")
+		if !checkManagerError(tc.t, "Create account in watching-only mode", err,
+			waddrmgr.ErrWatchingOnly) {
+			tc.manager.Close()
+			return false
+		}
 		return true
+	}
+	// Creating new accounts when wallet is locked should return ErrLocked
+	_, err := tc.manager.NewAccount("test")
+	if !checkManagerError(tc.t, "Create account when wallet is locked", err,
+		waddrmgr.ErrLocked) {
+		tc.manager.Close()
+		return false
 	}
 	// Unlock the wallet to decrypt cointype keys required
 	// to derive account keys
