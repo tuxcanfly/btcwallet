@@ -1049,27 +1049,34 @@ func serializeScriptAddress(encryptedHash, encryptedScript []byte) []byte {
 // the database.  The returned value is one of the address rows for the specific
 // address type.  The caller should use type assertions to ascertain the type.
 func fetchAddress(tx walletdb.Tx, addressID []byte) (interface{}, error) {
+	addrHash := fastsha256.Sum256(addressID)
+	return fetchAddressByHash(tx, addrHash[:])
+}
+
+// fetchAddressByHash loads address information for the provided address hash from
+// the database.  The returned value is one of the address rows for the specific
+// address type.  The caller should use type assertions to ascertain the type.
+func fetchAddressByHash(tx walletdb.Tx, addrHash []byte) (interface{}, error) {
 	bucket := tx.RootBucket().Bucket(addrBucketName)
 
-	addrHash := fastsha256.Sum256(addressID)
 	serializedRow := bucket.Get(addrHash[:])
 	if serializedRow == nil {
 		str := "address not found"
 		return nil, managerError(ErrAddressNotFound, str, nil)
 	}
 
-	row, err := deserializeAddressRow(addressID, serializedRow)
+	row, err := deserializeAddressRow(addrHash[:], serializedRow)
 	if err != nil {
 		return nil, err
 	}
 
 	switch row.addrType {
 	case adtChain:
-		return deserializeChainedAddress(addressID, row)
+		return deserializeChainedAddress(addrHash[:], row)
 	case adtImport:
-		return deserializeImportedAddress(addressID, row)
+		return deserializeImportedAddress(addrHash[:], row)
 	case adtScript:
-		return deserializeScriptAddress(addressID, row)
+		return deserializeScriptAddress(addrHash[:], row)
 	}
 
 	str := fmt.Sprintf("unsupported address type '%d'", row.addrType)
@@ -1231,13 +1238,11 @@ func fetchAddrAccount(tx walletdb.Tx, addressID []byte) (uint32, error) {
 // The returned value is a slice address rows for each specific address type.
 // The caller should use type assertions to ascertain the types.
 func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error) {
-	bucket := tx.RootBucket().Bucket(addrBucketName)
-
-	accountBucket := tx.RootBucket().Bucket(addrAcctIdxBucketName).
+	bucket := tx.RootBucket().Bucket(addrAcctIdxBucketName).
 		Bucket(uint32ToBytes(account))
 	// if index bucket is missing the account, there hasn't been any address
 	// entries yet
-	if accountBucket == nil {
+	if bucket == nil {
 		return nil, nil
 	}
 
@@ -1248,7 +1253,7 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 
 	var addrs = make([]interface{}, numAccountAddrs)
 	i := 0
-	err = accountBucket.ForEach(func(k, v []byte) error {
+	err = bucket.ForEach(func(k, v []byte) error {
 		// Skip buckets.
 		if v == nil {
 			return nil
@@ -1258,33 +1263,7 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 			str := "inconsistent address data stored in database"
 			return managerError(ErrDatabase, str, nil)
 		}
-		serializedRow := bucket.Get(k)
-
-		// Deserialize the address row first to determine the field
-		// values.
-		row, err := deserializeAddressRow(k, serializedRow)
-		if err != nil {
-			return err
-		}
-
-		// Filter by account
-		if row.account != account {
-			return nil
-		}
-
-		var addrRow interface{}
-		switch row.addrType {
-		case adtChain:
-			addrRow, err = deserializeChainedAddress(k, row)
-		case adtImport:
-			addrRow, err = deserializeImportedAddress(k, row)
-		case adtScript:
-			addrRow, err = deserializeScriptAddress(k, row)
-		default:
-			str := fmt.Sprintf("unsupported address type '%d'",
-				row.addrType)
-			return managerError(ErrDatabase, str, nil)
-		}
+		addrRow, err := fetchAddressByHash(tx, k)
 		if err != nil {
 			return err
 		}
@@ -1327,24 +1306,7 @@ func fetchAllAddresses(tx walletdb.Tx) ([]interface{}, error) {
 
 		// Deserialize the address row first to determine the field
 		// values.
-		row, err := deserializeAddressRow(k, v)
-		if err != nil {
-			return err
-		}
-
-		var addrRow interface{}
-		switch row.addrType {
-		case adtChain:
-			addrRow, err = deserializeChainedAddress(k, row)
-		case adtImport:
-			addrRow, err = deserializeImportedAddress(k, row)
-		case adtScript:
-			addrRow, err = deserializeScriptAddress(k, row)
-		default:
-			str := fmt.Sprintf("unsupported address type '%d'",
-				row.addrType)
-			return managerError(ErrDatabase, str, nil)
-		}
+		addrRow, err := fetchAddressByHash(tx, k)
 		if err != nil {
 			return err
 		}
