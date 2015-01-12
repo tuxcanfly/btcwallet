@@ -1256,13 +1256,11 @@ func testAllAccounts(tc *testContext) bool {
 		tc.t.Errorf("AllAccounts: unexpected error: %v", err)
 		return false
 	}
-	if len(expectedAccounts) != len(accounts) {
-		if len(accounts) != len(expectedAccounts) {
-			tc.t.Errorf("AllAccounts: unexpected number of accounts - got "+
-				"%d, want %d", len(accounts),
-				len(expectedAccounts))
-			return false
-		}
+	if len(accounts) != len(expectedAccounts) {
+		tc.t.Errorf("AllAccounts: unexpected number of accounts - got "+
+			"%d, want %d", len(accounts),
+			len(expectedAccounts))
+		return false
 	}
 	for i, account := range accounts {
 		if expectedAccounts[i] != account {
@@ -1294,13 +1292,11 @@ func testActiveAccountAddresses(tc *testContext) bool {
 		tc.t.Errorf("ActiveAccountAddresses: unexpected error: %v", err)
 		return false
 	}
-	if len(expectedAddrs) != len(addrs) {
-		if len(addrs) != len(expectedAddrs) {
-			tc.t.Errorf("ActiveAccountAddresses: unexpected number of addrs - got "+
-				"%d, want %d", len(addrs),
-				len(expectedAddrs))
-			return false
-		}
+	if len(addrs) != len(expectedAddrs) {
+		tc.t.Errorf("ActiveAccountAddresses: unexpected number of addrs - got "+
+			"%d, want %d", len(addrs),
+			len(expectedAddrs))
+		return false
 	}
 	for i, addr := range addrs {
 		if expectedAddrs[i] != addr.Address().EncodeAddress() {

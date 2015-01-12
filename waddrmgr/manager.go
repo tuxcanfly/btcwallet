@@ -1152,15 +1152,10 @@ func (m *Manager) Lock() error {
 	return nil
 }
 
-// LookupAccount loads account number stored in the manager for the given
+// lookupAccount loads account number stored in the manager for the given
 // account name
-func (m *Manager) LookupAccount(name string) (uint32, error) {
-	m.mtx.RLock()
-	defer m.mtx.RUnlock()
-
-	return m.lookupAccount(name)
-}
-
+//
+// This function MUST be called with the manager lock held for reads.
 func (m *Manager) lookupAccount(name string) (uint32, error) {
 	var account uint32
 	err := m.namespace.View(func(tx walletdb.Tx) error {
@@ -1169,6 +1164,15 @@ func (m *Manager) lookupAccount(name string) (uint32, error) {
 		return err
 	})
 	return account, err
+}
+
+// LookupAccount loads account number stored in the manager for the given
+// account name
+func (m *Manager) LookupAccount(name string) (uint32, error) {
+	m.mtx.RLock()
+	defer m.mtx.RUnlock()
+
+	return m.lookupAccount(name)
 }
 
 // Unlock derives the master private key from the specified passphrase.  An
@@ -1533,20 +1537,20 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 		return 0, managerError(ErrLocked, errLocked, nil)
 	}
 
-	var account uint32
-	var coinTypePrivEnc []byte
-
 	// Validate account name
 	if err := ValidateAccountName(name); err != nil {
-		return account, err
+		return 0, err
 	}
 
 	// Check that account with the same name does not exist
 	_, err := m.lookupAccount(name)
 	if err == nil {
 		str := fmt.Sprintf("account with the same name already exists")
-		return account, managerError(ErrDuplicateAccount, str, err)
+		return 0, managerError(ErrDuplicateAccount, str, err)
 	}
+
+	var account uint32
+	var coinTypePrivEnc []byte
 
 	// Fetch latest account, and create a new account in the same transaction
 	err = m.namespace.Update(func(tx walletdb.Tx) error {
@@ -1571,6 +1575,7 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 			return managerError(ErrLocked, str, err)
 		}
 		coinTypeKeyPriv, err := hdkeychain.NewKeyFromString(string(serializedKeyPriv))
+		zero(serializedKeyPriv)
 		if err != nil {
 			str := fmt.Sprintf("failed to create cointype extended private key")
 			return managerError(ErrKeyChain, str, err)
@@ -1578,6 +1583,7 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 
 		// Derive the account key using the cointype key
 		acctKeyPriv, err := deriveAccountKey(coinTypeKeyPriv, account)
+		coinTypeKeyPriv.Zero()
 		if err != nil {
 			str := "failed to convert private key for account"
 			return managerError(ErrKeyChain, str, err)
@@ -1604,10 +1610,25 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 		if err != nil {
 			return err
 		}
+
+		// Save last account metadata
 		if err := putLastAccount(tx, account); err != nil {
 			return err
 		}
-		return putNumAccounts(tx, 1)
+		// Save number of accounts metadata
+		numAccounts, err := fetchNumAccounts(tx)
+		if err != nil {
+			return err
+		}
+		numAccounts++
+		if err := putNumAccounts(tx, numAccounts); err != nil {
+			return err
+		}
+		// Save number of account addrs metadata
+		if err := putNumAccountAddrs(tx, account, 0); err != nil {
+			return err
+		}
+		return nil
 	})
 	return account, err
 }
@@ -1666,7 +1687,7 @@ func (m *Manager) AccountName(account uint32) (string, error) {
 		return err
 	})
 	if err != nil {
-		return acctName, err
+		return "", err
 	}
 
 	return acctName, nil
@@ -1684,7 +1705,7 @@ func (m *Manager) AllAccounts() ([]uint32, error) {
 		return err
 	})
 	if err != nil {
-		return accounts, err
+		return nil, err
 	}
 
 	return accounts, nil
@@ -1861,6 +1882,9 @@ func newManager(namespace walletdb.Namespace, net *btcnet.Params,
 // deriveCoinTypeKey derives the cointype key which can be used to derive the
 // extended key for an account according to the hierarchy described by BIP0044
 // given the coin type key.
+//
+// In particular this is the hierarchical deterministic extended key path:
+// m/44'/<coin type>'
 func deriveCoinTypeKey(masterNode *hdkeychain.ExtendedKey,
 	coinType uint32) (*hdkeychain.ExtendedKey, error) {
 	// Enforce maximum coin type.
@@ -2283,11 +2307,20 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 			return err
 		}
 
-		// Save metadata - last account and number of all accounts
+		// Save last account metadata
 		if err := putLastAccount(tx, DefaultAccountNum); err != nil {
 			return err
 		}
+		// Save number of accounts metadata
 		if err := putNumAccounts(tx, 1); err != nil {
+			return err
+		}
+		// Save number of account addrs metadata for default account
+		if err := putNumAccountAddrs(tx, DefaultAccountNum, 0); err != nil {
+			return err
+		}
+		// Save number of account addrs metadata for imported addrs account
+		if err := putNumAccountAddrs(tx, ImportedAddrAccount, 0); err != nil {
 			return err
 		}
 
@@ -2300,10 +2333,11 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 	}
 
 	// The new address manager is locked by default, so clear the master,
-	// crypto private, and crypto script keys from memory.
+	// crypto private, crypto script and cointype keys from memory.
 	masterKeyPriv.Zero()
 	cryptoKeyPriv.Zero()
 	cryptoKeyScript.Zero()
+	coinTypeKeyPriv.Zero()
 	return newManager(namespace, net, masterKeyPub, masterKeyPriv,
 		cryptoKeyPub, cryptoKeyPrivEnc, cryptoKeyScriptEnc, syncInfo,
 		config), nil
