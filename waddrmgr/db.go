@@ -856,7 +856,7 @@ func putLastAccount(tx walletdb.Tx, account uint32) error {
 // deserializeAddressRow deserializes the passed serialized address information.
 // This is used as a common base for the various address types to deserialize
 // the common parts.
-func deserializeAddressRow(addressID, serializedAddress []byte) (*dbAddressRow, error) {
+func deserializeAddressRow(serializedAddress []byte) (*dbAddressRow, error) {
 	// The serialized address format is:
 	//   <addrType><account><addedTime><syncStatus><rawdata>
 	//
@@ -866,8 +866,7 @@ func deserializeAddressRow(addressID, serializedAddress []byte) (*dbAddressRow, 
 	// Given the above, the length of the entry must be at a minimum
 	// the constant value sizes.
 	if len(serializedAddress) < 18 {
-		str := fmt.Sprintf("malformed serialized address for key %s",
-			addressID)
+		str := "malformed serialized address"
 		return nil, managerError(ErrDatabase, str, nil)
 	}
 
@@ -904,14 +903,13 @@ func serializeAddressRow(row *dbAddressRow) []byte {
 
 // deserializeChainedAddress deserializes the raw data from the passed address
 // row as a chained address.
-func deserializeChainedAddress(addressID []byte, row *dbAddressRow) (*dbChainAddressRow, error) {
+func deserializeChainedAddress(row *dbAddressRow) (*dbChainAddressRow, error) {
 	// The serialized chain address raw data format is:
 	//   <branch><index>
 	//
 	// 4 bytes branch + 4 bytes address index
 	if len(row.rawData) != 8 {
-		str := fmt.Sprintf("malformed serialized chained address for "+
-			"key %s", addressID)
+		str := "malformed serialized chained address"
 		return nil, managerError(ErrDatabase, str, nil)
 	}
 
@@ -940,7 +938,7 @@ func serializeChainedAddress(branch, index uint32) []byte {
 
 // deserializeImportedAddress deserializes the raw data from the passed address
 // row as an imported address.
-func deserializeImportedAddress(addressID []byte, row *dbAddressRow) (*dbImportedAddressRow, error) {
+func deserializeImportedAddress(row *dbAddressRow) (*dbImportedAddressRow, error) {
 	// The serialized imported address raw data format is:
 	//   <encpubkeylen><encpubkey><encprivkeylen><encprivkey>
 	//
@@ -950,8 +948,7 @@ func deserializeImportedAddress(addressID []byte, row *dbAddressRow) (*dbImporte
 	// Given the above, the length of the entry must be at a minimum
 	// the constant value sizes.
 	if len(row.rawData) < 8 {
-		str := fmt.Sprintf("malformed serialized imported address for "+
-			"key %s", addressID)
+		str := "malformed serialized imported address"
 		return nil, managerError(ErrDatabase, str, nil)
 	}
 
@@ -993,7 +990,7 @@ func serializeImportedAddress(encryptedPubKey, encryptedPrivKey []byte) []byte {
 
 // deserializeScriptAddress deserializes the raw data from the passed address
 // row as a script address.
-func deserializeScriptAddress(addressID []byte, row *dbAddressRow) (*dbScriptAddressRow, error) {
+func deserializeScriptAddress(row *dbAddressRow) (*dbScriptAddressRow, error) {
 	// The serialized script address raw data format is:
 	//   <encscripthashlen><encscripthash><encscriptlen><encscript>
 	//
@@ -1003,8 +1000,7 @@ func deserializeScriptAddress(addressID []byte, row *dbAddressRow) (*dbScriptAdd
 	// Given the above, the length of the entry must be at a minimum
 	// the constant value sizes.
 	if len(row.rawData) < 8 {
-		str := fmt.Sprintf("malformed serialized script address for "+
-			"key %s", addressID)
+		str := "malformed serialized script address"
 		return nil, managerError(ErrDatabase, str, nil)
 	}
 
@@ -1045,17 +1041,11 @@ func serializeScriptAddress(encryptedHash, encryptedScript []byte) []byte {
 	return rawData
 }
 
-// fetchAddress loads address information for the provided address id from
-// the database.  The returned value is one of the address rows for the specific
-// address type.  The caller should use type assertions to ascertain the type.
-func fetchAddress(tx walletdb.Tx, addressID []byte) (interface{}, error) {
-	addrHash := fastsha256.Sum256(addressID)
-	return fetchAddressByHash(tx, addrHash[:])
-}
-
-// fetchAddressByHash loads address information for the provided address hash from
-// the database.  The returned value is one of the address rows for the specific
-// address type.  The caller should use type assertions to ascertain the type.
+// fetchAddressByHash loads address information for the provided address hash
+// from the database.  The returned value is one of the address rows for the
+// specific address type.  The caller should use type assertions to ascertain
+// the type.  The caller should prefix the error message with the address hash
+// which caused the failure.
 func fetchAddressByHash(tx walletdb.Tx, addrHash []byte) (interface{}, error) {
 	bucket := tx.RootBucket().Bucket(addrBucketName)
 
@@ -1065,22 +1055,32 @@ func fetchAddressByHash(tx walletdb.Tx, addrHash []byte) (interface{}, error) {
 		return nil, managerError(ErrAddressNotFound, str, nil)
 	}
 
-	row, err := deserializeAddressRow(addrHash[:], serializedRow)
+	row, err := deserializeAddressRow(serializedRow)
 	if err != nil {
 		return nil, err
 	}
 
 	switch row.addrType {
 	case adtChain:
-		return deserializeChainedAddress(addrHash[:], row)
+		return deserializeChainedAddress(row)
 	case adtImport:
-		return deserializeImportedAddress(addrHash[:], row)
+		return deserializeImportedAddress(row)
 	case adtScript:
-		return deserializeScriptAddress(addrHash[:], row)
+		return deserializeScriptAddress(row)
 	}
 
 	str := fmt.Sprintf("unsupported address type '%d'", row.addrType)
 	return nil, managerError(ErrDatabase, str, nil)
+}
+
+// fetchAddress loads address information for the provided address id from the
+// database.  The returned value is one of the address rows for the specific
+// address type.  The caller should use type assertions to ascertain the type.
+// The caller should prefix the error message with the address which caused the
+// failure.
+func fetchAddress(tx walletdb.Tx, addressID []byte) (interface{}, error) {
+	addrHash := fastsha256.Sum256(addressID)
+	return fetchAddressByHash(tx, addrHash[:])
 }
 
 // putAddress stores the provided address information to the database.  This
@@ -1265,6 +1265,12 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 		}
 		addrRow, err := fetchAddressByHash(tx, k)
 		if err != nil {
+			if merr, ok := err.(*ManagerError); ok {
+				desc := fmt.Sprintf("failed to fetch address hash '%s': %v",
+					k, merr.Description)
+				merr.Description = desc
+				return merr
+			}
 			return err
 		}
 
@@ -1307,6 +1313,12 @@ func fetchAllAddresses(tx walletdb.Tx) ([]interface{}, error) {
 		// Deserialize the address row first to determine the field
 		// values.
 		addrRow, err := fetchAddressByHash(tx, k)
+		if merr, ok := err.(*ManagerError); ok {
+			desc := fmt.Sprintf("failed to fetch address hash '%s': %v",
+				k, merr.Description)
+			merr.Description = desc
+			return merr
+		}
 		if err != nil {
 			return err
 		}
@@ -1401,14 +1413,14 @@ func deletePrivateKeys(tx walletdb.Tx) error {
 
 		// Deserialize the address row first to determine the field
 		// values.
-		row, err := deserializeAddressRow(k, v)
+		row, err := deserializeAddressRow(v)
 		if err != nil {
 			return err
 		}
 
 		switch row.addrType {
 		case adtImport:
-			irow, err := deserializeImportedAddress(k, row)
+			irow, err := deserializeImportedAddress(row)
 			if err != nil {
 				return err
 			}
@@ -1424,7 +1436,7 @@ func deletePrivateKeys(tx walletdb.Tx) error {
 			}
 
 		case adtScript:
-			srow, err := deserializeScriptAddress(k, row)
+			srow, err := deserializeScriptAddress(row)
 			if err != nil {
 				return err
 			}

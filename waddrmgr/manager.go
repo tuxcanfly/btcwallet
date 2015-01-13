@@ -597,6 +597,12 @@ func (m *Manager) loadAndCacheAddress(address btcutil.Address) (ManagedAddress, 
 		return err
 	})
 	if err != nil {
+		if merr, ok := err.(*ManagerError); ok {
+			desc := fmt.Sprintf("failed to fetch address '%s': %v",
+				address.ScriptAddress(), merr.Description)
+			merr.Description = desc
+			return nil, merr
+		}
 		return nil, maybeConvertDbError(err)
 	}
 
