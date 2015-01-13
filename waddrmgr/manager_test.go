@@ -1253,6 +1253,13 @@ func testRenameAccount(tc *testContext) bool {
 	if !checkManagerError(tc.t, testName, err, wantErrCode) {
 		return false
 	}
+	// Test account name validation
+	testName = "*"
+	err = tc.manager.RenameAccount(tc.account, testName)
+	wantErrCode = waddrmgr.ErrInvalidAccount
+	if !checkManagerError(tc.t, testName, err, wantErrCode) {
+		return false
+	}
 	return true
 }
 

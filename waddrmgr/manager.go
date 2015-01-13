@@ -1646,6 +1646,11 @@ func (m *Manager) RenameAccount(account uint32, name string) error {
 		str := fmt.Sprintf("account with the same name already exists")
 		return managerError(ErrDuplicateAccount, str, err)
 	}
+	// Validate account name
+	if err := ValidateAccountName(name); err != nil {
+		return err
+	}
+
 	var rowInterface interface{}
 	err = m.namespace.Update(func(tx walletdb.Tx) error {
 		var err error
