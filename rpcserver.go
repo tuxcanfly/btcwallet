@@ -1104,13 +1104,13 @@ func (l managerLocked) notificationCmds(w *Wallet) []btcjson.Cmd {
 
 func (b confirmedBalance) notificationCmds(w *Wallet) []btcjson.Cmd {
 	n := btcws.NewAccountBalanceNtfn("",
-		btcutil.Amount(b).ToUnit(btcutil.AmountBTC), true)
+		btcutil.Amount(b).ToBTC(), true)
 	return []btcjson.Cmd{n}
 }
 
 func (b unconfirmedBalance) notificationCmds(w *Wallet) []btcjson.Cmd {
 	n := btcws.NewAccountBalanceNtfn("",
-		btcutil.Amount(b).ToUnit(btcutil.AmountBTC), false)
+		btcutil.Amount(b).ToBTC(), false)
 	return []btcjson.Cmd{n}
 }
 
@@ -1719,7 +1719,7 @@ func GetBalance(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interface{
 	if err != nil {
 		return nil, err
 	}
-	return balance.ToUnit(btcutil.AmountBTC), nil
+	return balance.ToBTC(), nil
 }
 
 // GetInfo handles a getinfo request by returning the a structure containing
@@ -1741,11 +1741,11 @@ func GetInfo(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interface{}, 
 	// TODO(davec): This should probably have a database version as opposed
 	// to using the manager version.
 	info.WalletVersion = int32(waddrmgr.LatestMgrVersion)
-	info.Balance = bal.ToUnit(btcutil.AmountBTC)
+	info.Balance = bal.ToBTC()
 	// Keypool times are not tracked. set to current time.
 	info.KeypoolOldest = time.Now().Unix()
 	info.KeypoolSize = int32(cfg.KeypoolSize)
-	info.PaytxFee = w.FeeIncrement.ToUnit(btcutil.AmountBTC)
+	info.PaytxFee = w.FeeIncrement.ToBTC()
 	// We don't set the following since they don't make much sense in the
 	// wallet architecture:
 	//  - unlocked_until
@@ -1818,7 +1818,7 @@ func GetUnconfirmedBalance(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) 
 		return nil, err
 	}
 
-	return (unconfirmed - confirmed).ToUnit(btcutil.AmountBTC), nil
+	return (unconfirmed - confirmed).ToBTC(), nil
 }
 
 // ImportPrivKey handles an importprivkey request by parsing
@@ -1950,7 +1950,7 @@ func GetReceivedByAccount(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (
 		return nil, err
 	}
 
-	return bal.ToUnit(btcutil.AmountBTC), nil
+	return bal.ToBTC(), nil
 }
 
 // GetReceivedByAddress handles a getreceivedbyaddress request by returning
@@ -1967,7 +1967,7 @@ func GetReceivedByAddress(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (
 		return nil, err
 	}
 
-	return total.ToUnit(btcutil.AmountBTC), nil
+	return total.ToBTC(), nil
 }
 
 // GetTransaction handles a gettransaction request by returning details about
@@ -2041,8 +2041,8 @@ func GetTransaction(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interf
 			Account:  acctName,
 			Category: "send",
 			// negative since it is a send
-			Amount: (-debits.OutputAmount(true)).ToUnit(btcutil.AmountBTC),
-			Fee:    debits.Fee().ToUnit(btcutil.AmountBTC),
+			Amount: (-debits.OutputAmount(true)).ToBTC(),
+			Fee:    debits.Fee().ToBTC(),
 		}
 		targetAddr = &details.Address
 		ret.Details[0] = details
@@ -2081,12 +2081,12 @@ func GetTransaction(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interf
 		ret.Details = append(ret.Details, btcjson.GetTransactionDetailsResult{
 			Account:  acctName,
 			Category: cred.Category(bs.Height).String(),
-			Amount:   cred.Amount().ToUnit(btcutil.AmountBTC),
+			Amount:   cred.Amount().ToBTC(),
 			Address:  addr,
 		})
 	}
 
-	ret.Amount = creditAmount.ToUnit(btcutil.AmountBTC)
+	ret.Amount = creditAmount.ToBTC()
 	return ret, nil
 }
 
@@ -2109,7 +2109,7 @@ func ListAccounts(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interfac
 		if err != nil {
 			return nil, err
 		}
-		accountBalances[acctName] = bal.ToUnit(btcutil.AmountBTC)
+		accountBalances[acctName] = bal.ToBTC()
 	}
 	// Return the map.  This will be marshaled into a JSON object.
 	return accountBalances, nil
@@ -2153,7 +2153,7 @@ func ListReceivedByAccount(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) 
 		}
 		ret = append(ret, btcjson.ListReceivedByAccountResult{
 			Account:       acctName,
-			Amount:        bal.ToUnit(btcutil.AmountBTC),
+			Amount:        bal.ToBTC(),
 			Confirmations: uint64(confirmations),
 		})
 	}
@@ -2255,7 +2255,7 @@ func ListReceivedByAddress(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) 
 		ret[idx] = btcjson.ListReceivedByAddressResult{
 			Account:       addrData.account,
 			Address:       address,
-			Amount:        addrData.amount.ToUnit(btcutil.AmountBTC),
+			Amount:        addrData.amount.ToBTC(),
 			Confirmations: uint64(addrData.confirmations),
 			TxIDs:         addrData.tx,
 		}

@@ -1220,7 +1220,7 @@ func (w *Wallet) ListUnspent(minconf, maxconf int,
 			Vout:          credit.OutputIndex,
 			Account:       "",
 			ScriptPubKey:  hex.EncodeToString(credit.TxOut().PkScript),
-			Amount:        credit.Amount().ToUnit(btcutil.AmountBTC),
+			Amount:        credit.Amount().ToBTC(),
 			Confirmations: int64(confs),
 		}
 
