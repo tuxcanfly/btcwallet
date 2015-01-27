@@ -88,21 +88,30 @@ type ManagedScriptAddress interface {
 	Script() ([]byte, error)
 }
 
+// publicAddress represents a address. It has only the most basic data common to
+// both managed and un-managed addresses.
+type publicAddress struct {
+	manager    *Manager
+	account    uint32
+	address    *btcutil.AddressPubKeyHash
+	imported   bool
+	internal   bool
+	compressed bool
+	used       bool
+}
+
 // managedAddress represents a public key address.  It also may or may not have
 // the private key associated with the public key.
 type managedAddress struct {
-	manager          *Manager
-	account          uint32
-	address          *btcutil.AddressPubKeyHash
-	imported         bool
-	internal         bool
-	compressed       bool
-	used             bool
+	publicAddress
 	pubKey           *btcec.PublicKey
 	privKeyEncrypted []byte
 	privKeyCT        []byte // non-nil if unlocked
 	privKeyMutex     sync.Mutex
 }
+
+// Enforce baseAddress satisfies the ManagedAddress interface.
+var _ ManagedAddress = (*publicAddress)(nil)
 
 // Enforce managedAddress satisfies the ManagedPubKeyAddress interface.
 var _ ManagedPubKeyAddress = (*managedAddress)(nil)
@@ -146,7 +155,7 @@ func (a *managedAddress) lock() {
 // Account returns the account number the address is associated with.
 //
 // This is part of the ManagedAddress interface implementation.
-func (a *managedAddress) Account() uint32 {
+func (a *publicAddress) Account() uint32 {
 	return a.account
 }
 
@@ -154,14 +163,14 @@ func (a *managedAddress) Account() uint32 {
 // This will be a pay-to-pubkey-hash address.
 //
 // This is part of the ManagedAddress interface implementation.
-func (a *managedAddress) Address() btcutil.Address {
+func (a *publicAddress) Address() btcutil.Address {
 	return a.address
 }
 
 // AddrHash returns the public key hash for the address.
 //
 // This is part of the ManagedAddress interface implementation.
-func (a *managedAddress) AddrHash() []byte {
+func (a *publicAddress) AddrHash() []byte {
 	return a.address.Hash160()[:]
 }
 
@@ -169,7 +178,7 @@ func (a *managedAddress) AddrHash() []byte {
 // address chain.
 //
 // This is part of the ManagedAddress interface implementation.
-func (a *managedAddress) Imported() bool {
+func (a *publicAddress) Imported() bool {
 	return a.imported
 }
 
@@ -177,21 +186,21 @@ func (a *managedAddress) Imported() bool {
 // change output of a transaction.
 //
 // This is part of the ManagedAddress interface implementation.
-func (a *managedAddress) Internal() bool {
+func (a *publicAddress) Internal() bool {
 	return a.internal
 }
 
 // Compressed returns true if the address is compressed.
 //
 // This is part of the ManagedAddress interface implementation.
-func (a *managedAddress) Compressed() bool {
+func (a *publicAddress) Compressed() bool {
 	return a.compressed
 }
 
 // Used returns true if the address has been used in a transaction.
 //
 // This is part of the ManagedAddress interface implementation.
-func (a *managedAddress) Used() bool {
+func (a *publicAddress) Used() bool {
 	return a.used
 }
 
@@ -263,6 +272,21 @@ func (a *managedAddress) ExportPrivKey() (*btcutil.WIF, error) {
 	return btcutil.NewWIF(pk, a.manager.chainParams, a.compressed)
 }
 
+// newAddress returns a new address based on the passed account and address
+// pubkeyhash.
+func newAddress(m *Manager, account uint32, addressID []byte) (*publicAddress, error) {
+	address, err := btcutil.NewAddressPubKeyHash(addressID, m.ChainParams())
+	if err != nil {
+		return nil, err
+	}
+	return &publicAddress{
+		manager:  m,
+		address:  address,
+		account:  account,
+		imported: true,
+	}, nil
+}
+
 // newManagedAddressWithoutPrivKey returns a new managed address based on the
 // passed account, public key, and whether or not the public key should be
 // compressed.
@@ -280,12 +304,14 @@ func newManagedAddressWithoutPrivKey(m *Manager, account uint32, pubKey *btcec.P
 	}
 
 	return &managedAddress{
-		manager:          m,
-		address:          address,
-		account:          account,
-		imported:         false,
-		internal:         false,
-		compressed:       compressed,
+		publicAddress: publicAddress{
+			manager:    m,
+			address:    address,
+			account:    account,
+			imported:   false,
+			internal:   false,
+			compressed: compressed,
+		},
 		pubKey:           pubKey,
 		privKeyEncrypted: nil,
 		privKeyCT:        nil,

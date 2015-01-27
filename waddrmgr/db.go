@@ -26,6 +26,7 @@ import (
 	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcwallet/walletdb"
 	"github.com/btcsuite/fastsha256"
+	"golang.org/x/crypto/ripemd160"
 )
 
 const (
@@ -76,10 +77,30 @@ type addressType uint8
 
 // These constants define the various supported address types.
 const (
-	adtChain  addressType = 0 // not iota as they need to be stable for db
-	adtImport addressType = 1
-	adtScript addressType = 2
+	adtChain    addressType = 0 // not iota as they need to be stable for db
+	adtImport   addressType = 1
+	adtScript   addressType = 2
+	adtWatching addressType = 3
 )
+
+// falseByte and trueByte are consts used to serialize boolean values.
+const (
+	falseByte byte = iota
+	trueByte
+)
+
+// boolAsByte converts a bool to a byte.
+func boolAsByte(b bool) byte {
+	if b {
+		return trueByte
+	}
+	return falseByte
+}
+
+// byteAsBool converts a byte to a bool.
+func byteAsBool(b byte) bool {
+	return b != 0
+}
 
 // accountType represents a type of address stored in the database.
 type accountType uint8
@@ -88,6 +109,9 @@ type accountType uint8
 const (
 	actBIP0044 accountType = 0 // not iota as they need to be stable for db
 )
+
+// encryptedHash160Size is the size of an encrypted Hash160 address.
+const encryptedHash160Size = ripemd160.Size * 3
 
 // dbAccountRow houses information stored about an account in the database.
 type dbAccountRow struct {
@@ -109,12 +133,13 @@ type dbBIP0044AccountRow struct {
 // dbAddressRow houses common information stored about an address in the
 // database.
 type dbAddressRow struct {
-	addrType   addressType
-	account    uint32
-	addTime    uint64
-	syncStatus syncStatus
-	used       bool
-	rawData    []byte // Varies based on address type field.
+	addrType     addressType
+	account      uint32
+	addTime      uint64
+	syncStatus   syncStatus
+	used         bool
+	watchingOnly bool
+	rawData      []byte // Varies based on address type field.
 }
 
 // dbChainAddressRow houses additional information stored about a chained
@@ -125,9 +150,16 @@ type dbChainAddressRow struct {
 	index  uint32
 }
 
-// dbImportedAddressRow houses additional information stored about an imported
+// dbImportedHash160AddressRow houses additional information stored about an imported
+// P2PKH address in the database.
+type dbImportedHash160AddressRow struct {
+	dbAddressRow
+	encryptedHash160 []byte
+}
+
+// dbImportedPubKeyAddressRow houses additional information stored about an imported
 // public key address in the database.
-type dbImportedAddressRow struct {
+type dbImportedPubKeyAddressRow struct {
 	dbAddressRow
 	encryptedPubKey  []byte
 	encryptedPrivKey []byte
@@ -804,14 +836,14 @@ func putLastAccount(tx walletdb.Tx, account uint32) error {
 // the common parts.
 func deserializeAddressRow(serializedAddress []byte) (*dbAddressRow, error) {
 	// The serialized address format is:
-	//   <addrType><account><addedTime><syncStatus><rawdata>
+	//   <addrType><account><addedTime><syncStatus><watchingOnly><rawdata>
 	//
 	// 1 byte addrType + 4 bytes account + 8 bytes addTime + 1 byte
-	// syncStatus + 4 bytes raw data length + raw data
+	// syncStatus + 1 byte watchingOnly + 4 bytes raw data length + raw data
 
 	// Given the above, the length of the entry must be at a minimum
 	// the constant value sizes.
-	if len(serializedAddress) < 18 {
+	if len(serializedAddress) < 19 {
 		str := "malformed serialized address"
 		return nil, managerError(ErrDatabase, str, nil)
 	}
@@ -821,9 +853,11 @@ func deserializeAddressRow(serializedAddress []byte) (*dbAddressRow, error) {
 	row.account = binary.LittleEndian.Uint32(serializedAddress[1:5])
 	row.addTime = binary.LittleEndian.Uint64(serializedAddress[5:13])
 	row.syncStatus = syncStatus(serializedAddress[13])
-	rdlen := binary.LittleEndian.Uint32(serializedAddress[14:18])
+	watchingOnly := byteAsBool(serializedAddress[14])
+	row.watchingOnly = watchingOnly
+	rdlen := binary.LittleEndian.Uint32(serializedAddress[15:19])
 	row.rawData = make([]byte, rdlen)
-	copy(row.rawData, serializedAddress[18:18+rdlen])
+	copy(row.rawData, serializedAddress[19:19+rdlen])
 
 	return &row, nil
 }
@@ -831,19 +865,20 @@ func deserializeAddressRow(serializedAddress []byte) (*dbAddressRow, error) {
 // serializeAddressRow returns the serialization of the passed address row.
 func serializeAddressRow(row *dbAddressRow) []byte {
 	// The serialized address format is:
-	//   <addrType><account><addedTime><syncStatus><commentlen><comment>
+	//   <addrType><account><addedTime><syncStatus><watchingOnly><rawdata>
 	//   <rawdata>
 	//
 	// 1 byte addrType + 4 bytes account + 8 bytes addTime + 1 byte
-	// syncStatus + 4 bytes raw data length + raw data
+	// syncStatus + 1 byte watchingOnly + 4 bytes raw data length + raw data
 	rdlen := len(row.rawData)
-	buf := make([]byte, 18+rdlen)
+	buf := make([]byte, 19+rdlen)
 	buf[0] = byte(row.addrType)
 	binary.LittleEndian.PutUint32(buf[1:5], row.account)
 	binary.LittleEndian.PutUint64(buf[5:13], row.addTime)
 	buf[13] = byte(row.syncStatus)
-	binary.LittleEndian.PutUint32(buf[14:18], uint32(rdlen))
-	copy(buf[18:18+rdlen], row.rawData)
+	buf[14] = boolAsByte(row.watchingOnly)
+	binary.LittleEndian.PutUint32(buf[15:19], uint32(rdlen))
+	copy(buf[19:19+rdlen], row.rawData)
 	return buf
 }
 
@@ -882,14 +917,49 @@ func serializeChainedAddress(branch, index uint32) []byte {
 	return rawData
 }
 
-// deserializeImportedAddress deserializes the raw data from the passed address
-// row as an imported address.
-func deserializeImportedAddress(row *dbAddressRow) (*dbImportedAddressRow, error) {
+// deserializeImportedHash160AddressRow deserializes the raw data from the passed address
+// row as an imported hash 160 address.
+func deserializeImportedHash160AddressRow(row *dbAddressRow) (*dbImportedHash160AddressRow, error) {
+	// The serialized imported address raw data format is:
+	//   <enchash160>
+	//
+	//  encrypted hash160 (ripemd160*3 = 60 bytes)
+
+	if len(row.rawData) < encryptedHash160Size {
+		str := "malformed serialized imported address"
+		return nil, managerError(ErrDatabase, str, nil)
+	}
+
+	retRow := dbImportedHash160AddressRow{
+		dbAddressRow: *row,
+	}
+
+	retRow.encryptedHash160 = make([]byte, encryptedHash160Size)
+	copy(retRow.encryptedHash160, row.rawData)
+	return &retRow, nil
+}
+
+// serializeImportedHash160AddressRow returns the serialization of the raw data field for
+// an imported hash 160 address.
+func serializeImportedHash160AddressRow(encryptedHash160 []byte) []byte {
+	// The serialized imported address raw data format is:
+	//   <enchash160>
+	//
+	//  encrypted hash160 (ripemd160*3 = 60 bytes)
+
+	rawData := make([]byte, 8+encryptedHash160Size)
+	copy(rawData, encryptedHash160)
+	return rawData
+}
+
+// deserializeImportedPubKeyAddress deserializes the raw data from the passed address
+// row as an imported pubkey address.
+func deserializeImportedPubKeyAddress(row *dbAddressRow) (*dbImportedPubKeyAddressRow, error) {
 	// The serialized imported address raw data format is:
 	//   <encpubkeylen><encpubkey><encprivkeylen><encprivkey>
 	//
-	// 4 bytes encrypted pubkey len + encrypted pubkey + 4 bytes encrypted
-	// privkey len + encrypted privkey
+	// 4 bytes encrypted pubkey len + encrypted pubkey +
+	// 4 bytes encrypted privkey len + encrypted privkey
 
 	// Given the above, the length of the entry must be at a minimum
 	// the constant value sizes.
@@ -898,39 +968,39 @@ func deserializeImportedAddress(row *dbAddressRow) (*dbImportedAddressRow, error
 		return nil, managerError(ErrDatabase, str, nil)
 	}
 
-	retRow := dbImportedAddressRow{
+	retRow := dbImportedPubKeyAddressRow{
 		dbAddressRow: *row,
 	}
 
 	pubLen := binary.LittleEndian.Uint32(row.rawData[0:4])
 	retRow.encryptedPubKey = make([]byte, pubLen)
 	copy(retRow.encryptedPubKey, row.rawData[4:4+pubLen])
-	offset := 4 + pubLen
-	privLen := binary.LittleEndian.Uint32(row.rawData[offset : offset+4])
-	offset += 4
+
+	privLen := binary.LittleEndian.Uint32(row.rawData[4+pubLen : 8+pubLen])
 	retRow.encryptedPrivKey = make([]byte, privLen)
-	copy(retRow.encryptedPrivKey, row.rawData[offset:offset+privLen])
+	copy(retRow.encryptedPrivKey, row.rawData[8+pubLen:8+pubLen+privLen])
 
 	return &retRow, nil
 }
 
-// serializeImportedAddress returns the serialization of the raw data field for
+// serializeImportedPubKeyAddress returns the serialization of the raw data field for
 // an imported address.
-func serializeImportedAddress(encryptedPubKey, encryptedPrivKey []byte) []byte {
+func serializeImportedPubKeyAddress(encryptedPKHash, encryptedPubKey, encryptedPrivKey []byte) []byte {
 	// The serialized imported address raw data format is:
 	//   <encpubkeylen><encpubkey><encprivkeylen><encprivkey>
 	//
-	// 4 bytes encrypted pubkey len + encrypted pubkey + 4 bytes encrypted
-	// privkey len + encrypted privkey
+	// 4 bytes encrypted pubkey len + encrypted pubkey +
+	// 4 bytes encrypted privkey len + encrypted privkey
 	pubLen := uint32(len(encryptedPubKey))
 	privLen := uint32(len(encryptedPrivKey))
 	rawData := make([]byte, 8+pubLen+privLen)
+
 	binary.LittleEndian.PutUint32(rawData[0:4], pubLen)
 	copy(rawData[4:4+pubLen], encryptedPubKey)
-	offset := 4 + pubLen
-	binary.LittleEndian.PutUint32(rawData[offset:offset+4], privLen)
-	offset += 4
-	copy(rawData[offset:offset+privLen], encryptedPrivKey)
+
+	binary.LittleEndian.PutUint32(rawData[4+pubLen:8+pubLen], privLen)
+	copy(rawData[8+pubLen:8+pubLen+privLen], encryptedPrivKey)
+
 	return rawData
 }
 
@@ -1022,9 +1092,11 @@ func fetchAddressByHash(tx walletdb.Tx, addrHash []byte) (interface{}, error) {
 	case adtChain:
 		return deserializeChainedAddress(row)
 	case adtImport:
-		return deserializeImportedAddress(row)
+		return deserializeImportedPubKeyAddress(row)
 	case adtScript:
 		return deserializeScriptAddress(row)
+	case adtWatching:
+		return deserializeImportedHash160AddressRow(row)
 	}
 
 	str := fmt.Sprintf("unsupported address type '%d'", row.addrType)
@@ -1079,14 +1151,15 @@ func putAddress(tx walletdb.Tx, addressID []byte, row *dbAddressRow) error {
 // putChainedAddress stores the provided chained address information to the
 // database.
 func putChainedAddress(tx walletdb.Tx, addressID []byte, account uint32,
-	status syncStatus, branch, index uint32) error {
+	status syncStatus, watchingOnly bool, branch, index uint32) error {
 
 	addrRow := dbAddressRow{
-		addrType:   adtChain,
-		account:    account,
-		addTime:    uint64(time.Now().Unix()),
-		syncStatus: status,
-		rawData:    serializeChainedAddress(branch, index),
+		addrType:     adtChain,
+		account:      account,
+		addTime:      uint64(time.Now().Unix()),
+		syncStatus:   status,
+		watchingOnly: watchingOnly,
+		rawData:      serializeChainedAddress(branch, index),
 	}
 	if err := putAddress(tx, addressID, &addrRow); err != nil {
 		return err
@@ -1132,18 +1205,36 @@ func putChainedAddress(tx walletdb.Tx, addressID []byte, account uint32,
 	return nil
 }
 
-// putImportedAddress stores the provided imported address information to the
+// putImportedPubKeyAddress stores the provided imported address information to the
 // database.
-func putImportedAddress(tx walletdb.Tx, addressID []byte, account uint32,
-	status syncStatus, encryptedPubKey, encryptedPrivKey []byte) error {
+func putImportedPubKeyAddress(tx walletdb.Tx, addressID []byte, account uint32,
+	status syncStatus, watchingOnly bool, encryptedPKHash, encryptedPubKey, encryptedPrivKey []byte) error {
 
-	rawData := serializeImportedAddress(encryptedPubKey, encryptedPrivKey)
+	rawData := serializeImportedPubKeyAddress(encryptedPKHash, encryptedPubKey, encryptedPrivKey)
 	addrRow := dbAddressRow{
-		addrType:   adtImport,
-		account:    account,
-		addTime:    uint64(time.Now().Unix()),
-		syncStatus: status,
-		rawData:    rawData,
+		addrType:     adtImport,
+		account:      account,
+		addTime:      uint64(time.Now().Unix()),
+		syncStatus:   status,
+		watchingOnly: watchingOnly,
+		rawData:      rawData,
+	}
+	return putAddress(tx, addressID, &addrRow)
+}
+
+// putImportedHash160Address stores the provided imported address information to the
+// database.
+func putImportedHash160Address(tx walletdb.Tx, addressID []byte, account uint32,
+	status syncStatus, encryptedHash160 []byte) error {
+
+	rawData := serializeImportedHash160AddressRow(encryptedHash160)
+	addrRow := dbAddressRow{
+		addrType:     adtWatching,
+		account:      account,
+		addTime:      uint64(time.Now().Unix()),
+		syncStatus:   status,
+		watchingOnly: true,
+		rawData:      rawData,
 	}
 	return putAddress(tx, addressID, &addrRow)
 }
@@ -1151,15 +1242,16 @@ func putImportedAddress(tx walletdb.Tx, addressID []byte, account uint32,
 // putScriptAddress stores the provided script address information to the
 // database.
 func putScriptAddress(tx walletdb.Tx, addressID []byte, account uint32,
-	status syncStatus, encryptedHash, encryptedScript []byte) error {
+	status syncStatus, watchingOnly bool, encryptedHash, encryptedScript []byte) error {
 
 	rawData := serializeScriptAddress(encryptedHash, encryptedScript)
 	addrRow := dbAddressRow{
-		addrType:   adtScript,
-		account:    account,
-		addTime:    uint64(time.Now().Unix()),
-		syncStatus: status,
-		rawData:    rawData,
+		addrType:     adtScript,
+		account:      account,
+		addTime:      uint64(time.Now().Unix()),
+		syncStatus:   status,
+		watchingOnly: watchingOnly,
+		rawData:      rawData,
 	}
 	if err := putAddress(tx, addressID, &addrRow); err != nil {
 		return err
@@ -1353,14 +1445,14 @@ func deletePrivateKeys(tx walletdb.Tx) error {
 
 		switch row.addrType {
 		case adtImport:
-			irow, err := deserializeImportedAddress(row)
+			irow, err := deserializeImportedPubKeyAddress(row)
 			if err != nil {
 				return err
 			}
 
 			// Reserialize the imported address without the private
 			// key and store it.
-			row.rawData = serializeImportedAddress(
+			row.rawData = serializeImportedPubKeyAddress(nil,
 				irow.encryptedPubKey, nil)
 			err = bucket.Put(k, serializeAddressRow(row))
 			if err != nil {
