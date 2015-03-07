@@ -56,6 +56,11 @@ const (
 	// provided by having all public data in the wallet encrypted by a
 	// passphrase only known to them.
 	defaultPubPassphrase = "public"
+
+	// maxEmptyAccounts is the number of accounts to scan even if they have no
+	// transaction history. This is a deviation from BIP044 to make account
+	// creation more easier by allowing a limited number of empty accounts.
+	maxEmptyAccounts = 100
 )
 
 // networkDir returns the directory name of a network directory to hold wallet

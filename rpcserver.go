@@ -1866,19 +1866,23 @@ func KeypoolRefill(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interfa
 // as per BIP 0044 a new account cannot be created so an error will be returned.
 func CreateNewAccount(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interface{}, error) {
 	cmd := icmd.(*btcws.CreateNewAccountCmd)
-	// Check that the last account has a transaction history
+
+	// Check that we are within the maximum allowed non-empty accounts limit.
 	account, err := w.Manager.LastAccount()
 	if err != nil {
 		return nil, err
 	}
-	used, err := w.AccountUsed(account)
-	if err != nil {
-		return nil, err
+	if account > maxEmptyAccounts {
+		used, err := w.AccountUsed(account)
+		if err != nil {
+			return nil, err
+		}
+		if !used {
+			return nil, errors.New("cannot create account: " +
+				"previous account has no transaction history")
+		}
 	}
-	if !used {
-		return nil, errors.New("cannot create account: " +
-			"previous account has no transaction history")
-	}
+
 	_, err = w.Manager.NewAccount(cmd.Account)
 	if isManagerLockedError(err) {
 		return nil, btcjson.ErrWalletUnlockNeeded
