@@ -51,8 +51,14 @@ const (
 	// fit into that model.
 	ImportedAddrAccount = MaxAccountNum + 1 // 2^31 - 1
 
+	// ImportedAddrAccountName is the name of the imported account.
+	ImportedAddrAccountName = "imported"
+
 	// DefaultAccountNum is the number of the default account.
 	DefaultAccountNum = 0
+
+	// DefaultAccountName is the name of the default account.
+	DefaultAccountName = "default"
 
 	// The hierarchy described by BIP0043 is:
 	//  m/<purpose>'/*
@@ -80,6 +86,16 @@ const (
 	// saltSize is the number of bytes of the salt used when hashing
 	// private passphrases.
 	saltSize = 32
+)
+
+var (
+	// reservedAccountNames is a set of account names reserved for internal
+	// purposes
+	reservedAccountNames = map[string]struct{}{
+		"*":                     struct{}{},
+		DefaultAccountName:      struct{}{},
+		ImportedAddrAccountName: struct{}{},
+	}
 )
 
 // Options is used to hold the optional parameters passed to Create or Load.
@@ -1577,8 +1593,8 @@ func ValidateAccountName(name string) error {
 		str := "invalid account name, cannot be blank"
 		return managerError(ErrInvalidAccount, str, nil)
 	}
-	if name == "*" {
-		str := "invalid account name, cannot be '*'"
+	if _, ok := reservedAccountNames[name]; ok {
+		str := "reserved account name"
 		return managerError(ErrInvalidAccount, str, nil)
 	}
 	return nil
@@ -2399,7 +2415,7 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 
 		// Save the information for the default account to the database.
 		return putAccountInfo(tx, DefaultAccountNum, acctPubEnc,
-			acctPrivEnc, 0, 0, "")
+			acctPrivEnc, 0, 0, DefaultAccountName)
 	})
 	if err != nil {
 		return nil, maybeConvertDbError(err)

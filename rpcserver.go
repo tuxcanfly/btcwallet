@@ -1060,9 +1060,9 @@ func (b blockDisconnected) notificationCmds(w *Wallet) []btcjson.Cmd {
 
 func (c txCredit) notificationCmds(w *Wallet) []btcjson.Cmd {
 	blk := w.Manager.SyncedTo()
-	var acctName string
+	acctName := waddrmgr.DefaultAccountName
 	if creditAccount, err := w.CreditAccount(txstore.Credit(c)); err == nil {
-		// acctName is defaulted to "" in case of an error
+		// acctName is defaulted to DefaultAccountName in case of an error
 		acctName, _ = w.Manager.AccountName(creditAccount)
 	}
 	ltr, err := txstore.Credit(c).ToJSON(acctName, blk.Height, activeNet.Params)
@@ -1077,9 +1077,9 @@ func (c txCredit) notificationCmds(w *Wallet) []btcjson.Cmd {
 
 func (d txDebit) notificationCmds(w *Wallet) []btcjson.Cmd {
 	blk := w.Manager.SyncedTo()
-	var acctName string
+	acctName := waddrmgr.DefaultAccountName
 	if debitAccount, err := w.DebitAccount(txstore.Debits(d)); err == nil {
-		// acctName is defaulted to "" in case of an error
+		// acctName is defaulted to DefaultAccountName in case of an error
 		acctName, _ = w.Manager.AccountName(debitAccount)
 	}
 	ltrs, err := txstore.Debits(d).ToJSON(acctName, blk.Height, activeNet.Params)

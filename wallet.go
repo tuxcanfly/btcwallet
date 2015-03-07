@@ -1225,7 +1225,7 @@ func (w *Wallet) ListUnspent(minconf, maxconf int,
 		result := &btcjson.ListUnspentResult{
 			TxId:          credit.Tx().Sha().String(),
 			Vout:          credit.OutputIndex,
-			Account:       "",
+			Account:       waddrmgr.DefaultAccountName,
 			ScriptPubKey:  hex.EncodeToString(credit.TxOut().PkScript),
 			Amount:        credit.Amount().ToBTC(),
 			Confirmations: int64(confs),
