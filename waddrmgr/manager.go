@@ -2193,6 +2193,11 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 		return nil, err
 	}
 
+	// Upgrade the manager to the latest version as needed.
+	if err := upgradeManager(namespace); err != nil {
+		return nil, err
+	}
+
 	if config == nil {
 		config = defaultConfig
 	}
@@ -2389,23 +2394,6 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 		// Save the initial recent blocks state.
 		err = putRecentBlocks(tx, recentHeight, recentHashes)
 		if err != nil {
-			return err
-		}
-
-		// Save last account metadata
-		if err := putLastAccount(tx, DefaultAccountNum); err != nil {
-			return err
-		}
-		// Save number of accounts metadata
-		if err := putNumAccounts(tx, 1); err != nil {
-			return err
-		}
-		// Save number of account addrs metadata for default account
-		if err := putNumAccountAddrs(tx, DefaultAccountNum, 0); err != nil {
-			return err
-		}
-		// Save number of account addrs metadata for imported addrs account
-		if err := putNumAccountAddrs(tx, ImportedAddrAccount, 0); err != nil {
 			return err
 		}
 

@@ -28,7 +28,7 @@ import (
 
 const (
 	// LatestMgrVersion is the most recent manager version.
-	LatestMgrVersion = 1
+	LatestMgrVersion = 3
 )
 
 var (
@@ -232,6 +232,18 @@ func stringToBytes(s string) []byte {
 	copy(buf[0:4], uint32ToBytes(uint32(size)))
 	copy(buf[4:4+size], s)
 	return buf
+}
+
+// fetchManagerVersion fetches the current manager version from the database.
+func fetchManagerVersion(tx walletdb.Tx) (uint32, error) {
+	mainBucket := tx.RootBucket().Bucket(mainBucketName)
+	verBytes := mainBucket.Get(mgrVersionName)
+	if verBytes == nil {
+		str := "required version number not stored in database"
+		return 0, managerError(ErrDatabase, str, nil)
+	}
+	version := binary.LittleEndian.Uint32(verBytes)
+	return version, nil
 }
 
 // putManagerVersion stores the provided version to the database.
@@ -813,6 +825,7 @@ func putAccountInfo(tx walletdb.Tx, account uint32, encryptedPubKey,
 	if err := putAccountNameIndex(tx, account, name); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -1670,7 +1683,7 @@ func createManagerNS(namespace walletdb.Namespace) error {
 			return managerError(ErrDatabase, str, err)
 		}
 
-		if err := putManagerVersion(tx, latestMgrVersion); err != nil {
+		if err := putManagerVersion(tx, 1); err != nil {
 			return err
 		}
 
@@ -1696,13 +1709,11 @@ func createManagerNS(namespace walletdb.Namespace) error {
 // upgradeManager upgrades the data in the provided manager namespace to newer
 // versions as neeeded.
 func upgradeManager(namespace walletdb.Namespace) error {
-	// Get the current version.
 	var version uint32
 	err := namespace.View(func(tx walletdb.Tx) error {
-		mainBucket := tx.RootBucket().Bucket(mainBucketName)
-		verBytes := mainBucket.Get(mgrVersionName)
-		version = binary.LittleEndian.Uint32(verBytes)
-		return nil
+		var err error
+		version, err = fetchManagerVersion(tx)
+		return err
 	})
 	if err != nil {
 		str := "failed to fetch version for update"
@@ -1739,6 +1750,16 @@ func upgradeManager(namespace walletdb.Namespace) error {
 	//	version = 3
 	// }
 
+	if version < 3 {
+		// Upgrade from version 1 to 3.
+		if err := upgradeToVersion3(namespace); err != nil {
+			return err
+		}
+
+		// The manager is now at version 3.
+		version = 3
+	}
+
 	// Ensure the manager is upraded to the latest version.  This check is
 	// to intentionally cause a failure if the manager version is updated
 	// without writing code to handle the upgrade.
@@ -1749,5 +1770,63 @@ func upgradeManager(namespace walletdb.Namespace) error {
 		return managerError(ErrUpgrade, str, nil)
 	}
 
+	return nil
+}
+
+// upgradeToVersion3 upgrades the database from version 1 to version 3
+// The following buckets were introduced in version 3 to support account names:
+// * acctNameIdxBucketName
+// * acctIdIdxBucketName
+// * metaBucketName
+func upgradeToVersion3(namespace walletdb.Namespace) error {
+	err := namespace.Update(func(tx walletdb.Tx) error {
+		currentMgrVersion := uint32(3)
+		rootBucket := tx.RootBucket()
+
+		_, err := rootBucket.CreateBucketIfNotExists(acctNameIdxBucketName)
+		if err != nil {
+			str := "failed to create an account name index bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		_, err = rootBucket.CreateBucketIfNotExists(acctIdIdxBucketName)
+		if err != nil {
+			str := "failed to create an account id index bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		_, err = rootBucket.CreateBucketIfNotExists(metaBucketName)
+		if err != nil {
+			str := "failed to create a meta bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		// Initialize metadata for all keys
+		if err := putLastAccount(tx, DefaultAccountNum); err != nil {
+			return err
+		}
+		if err := putNumAccounts(tx, 1); err != nil {
+			return err
+		}
+		if err := putNumAccountAddrs(tx, DefaultAccountNum, 0); err != nil {
+			return err
+		}
+		if err := putNumAccountAddrs(tx, ImportedAddrAccount, 0); err != nil {
+			return err
+		}
+		if err := putNumAllAddrs(tx, 0); err != nil {
+			return err
+		}
+
+		// Write current manager version
+		if err := putManagerVersion(tx, currentMgrVersion); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return maybeConvertDbError(err)
+	}
 	return nil
 }
