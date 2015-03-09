@@ -2401,6 +2401,13 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 			return err
 		}
 
+		// Save the information for the imported account to the database.
+		err = putAccountInfo(tx, ImportedAddrAccount, nil,
+			nil, 0, 0, ImportedAddrAccountName)
+		if err != nil {
+			return err
+		}
+
 		// Save the information for the default account to the database.
 		err = putAccountInfo(tx, DefaultAccountNum, acctPubEnc,
 			acctPrivEnc, 0, 0, DefaultAccountName)

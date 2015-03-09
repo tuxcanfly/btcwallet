@@ -1271,9 +1271,11 @@ func testRenameAccount(tc *testContext) bool {
 func testAllAccounts(tc *testContext) bool {
 	expectedAccounts := []uint32{0, 1}
 	if !tc.create {
-		// Existing wallet manager will have 2 accounts
+		// Existing wallet manager will have 3 accounts
 		expectedAccounts = append(expectedAccounts, 2)
 	}
+	// Imported account
+	expectedAccounts = append(expectedAccounts, waddrmgr.ImportedAddrAccount)
 	accounts, err := tc.manager.AllAccounts()
 	if err != nil {
 		tc.t.Errorf("AllAccounts: unexpected error: %v", err)
