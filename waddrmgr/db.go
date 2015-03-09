@@ -169,17 +169,11 @@ var (
 	acctIdIdxBucketName = []byte("acctididx")
 
 	// meta is used to store meta-data about the address manager
-	// for example: number of accounts, number of addresses, last
-	// account number
+	// e.g. last account number
 	metaBucketName = []byte("meta")
-	// numAccountsName is used to store the metadata - number of
-	// all accounts in the manager
-	numAccountsName = []byte("numaccounts")
 	// lastAccountName is used to store the metadata - last account
 	// in the manager
-	lastAccountName  = []byte("lastaccount")
-	numAllAddrsName  = []byte("numalladdrs")
-	numAcctAddrsName = []byte("numacctaddrs")
+	lastAccountName = []byte("lastaccount")
 
 	mainBucketName = []byte("main")
 	syncBucketName = []byte("sync")
@@ -437,48 +431,6 @@ func fetchWatchingOnly(tx walletdb.Tx) (bool, error) {
 	return buf[0] != 0, nil
 }
 
-// fetchNumAllAddresses loads the metadata - number of all addrs - from the database.
-func fetchNumAllAddresses(tx walletdb.Tx) (uint64, error) {
-	bucket := tx.RootBucket().Bucket(metaBucketName)
-
-	val := bucket.Get(numAllAddrsName)
-	if len(val) != 8 {
-		str := fmt.Sprintf("malformed metadata '%s' stored in database",
-			numAllAddrsName)
-		return 0, managerError(ErrDatabase, str, nil)
-	}
-	n := binary.LittleEndian.Uint64(val[0:8])
-	return n, nil
-}
-
-// fetchNumAccountAddrs loads the metadata - number of account addrs - from the database.
-func fetchNumAccountAddrs(tx walletdb.Tx, account uint32) (uint32, error) {
-	bucket := tx.RootBucket().Bucket(metaBucketName).Bucket(uint32ToBytes(account))
-
-	val := bucket.Get(numAcctAddrsName)
-	if len(val) != 4 {
-		str := fmt.Sprintf("malformed metadata '%s' stored in database",
-			numAcctAddrsName)
-		return 0, managerError(ErrDatabase, str, nil)
-	}
-	n := binary.LittleEndian.Uint32(val[0:4])
-	return n, nil
-}
-
-// fetchNumAccounts loads the metadata - number of all accounts - from the database.
-func fetchNumAccounts(tx walletdb.Tx) (uint32, error) {
-	bucket := tx.RootBucket().Bucket(metaBucketName)
-
-	val := bucket.Get(numAccountsName)
-	if len(val) != 4 {
-		str := fmt.Sprintf("malformed metadata '%s' stored in database",
-			numAccountsName)
-		return 0, managerError(ErrDatabase, str, nil)
-	}
-	n := binary.LittleEndian.Uint32(val[0:4])
-	return n, nil
-}
-
 // putWatchingOnly stores the watching-only flag to the database.
 func putWatchingOnly(tx walletdb.Tx, watchingOnly bool) error {
 	bucket := tx.RootBucket().Bucket(mainBucketName)
@@ -618,25 +570,13 @@ func serializeBIP0044AccountRow(encryptedPubKey,
 func fetchAllAccounts(tx walletdb.Tx) ([]uint32, error) {
 	bucket := tx.RootBucket().Bucket(acctBucketName)
 
-	numAccounts, err := fetchNumAccounts(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	var accounts = make([]uint32, numAccounts)
-	i := 0
-	err = bucket.ForEach(func(k, v []byte) error {
+	var accounts []uint32
+	err := bucket.ForEach(func(k, v []byte) error {
 		// Skip buckets.
 		if v == nil {
 			return nil
 		}
-		// Handle index out of range due to invalid metadata
-		if i > len(accounts)-1 {
-			str := "inconsistent account data stored in database"
-			return managerError(ErrDatabase, str, nil)
-		}
-		accounts[i] = binary.LittleEndian.Uint32(k)
-		i++
+		accounts = append(accounts, binary.LittleEndian.Uint32(k))
 		return nil
 	})
 	return accounts, err
@@ -826,46 +766,6 @@ func putAccountInfo(tx walletdb.Tx, account uint32, encryptedPubKey,
 		return err
 	}
 
-	return nil
-}
-
-// putNumAllAddrs stores the provided metadata - number of new addrs - to the database.
-func putNumAllAddrs(tx walletdb.Tx, n uint64) error {
-	bucket := tx.RootBucket().Bucket(metaBucketName)
-
-	err := bucket.Put(numAllAddrsName, uint64ToBytes(n))
-	if err != nil {
-		str := fmt.Sprintf("failed to update metadata '%s'", numAllAddrsName)
-		return managerError(ErrDatabase, str, err)
-	}
-	return nil
-}
-
-// putNumAccountAddrs stores the provided metadata - number of new account addrs - to the database.
-func putNumAccountAddrs(tx walletdb.Tx, account uint32, n uint32) error {
-	bucket, err := tx.RootBucket().Bucket(metaBucketName).CreateBucketIfNotExists(uint32ToBytes(account))
-	if err != nil {
-		str := fmt.Sprintf("failed to create account metadata bucket '%d'", account)
-		return managerError(ErrDatabase, str, err)
-	}
-
-	err = bucket.Put(numAcctAddrsName, uint32ToBytes(n))
-	if err != nil {
-		str := fmt.Sprintf("failed to update metadata '%s'", numAcctAddrsName)
-		return managerError(ErrDatabase, str, err)
-	}
-	return nil
-}
-
-// putNumAccounts stores the provided metadata - number of new accounts - to the database.
-func putNumAccounts(tx walletdb.Tx, n uint32) error {
-	bucket := tx.RootBucket().Bucket(metaBucketName)
-
-	err := bucket.Put(numAccountsName, uint32ToBytes(n))
-	if err != nil {
-		str := fmt.Sprintf("failed to update metadata '%s'", numAccountsName)
-		return managerError(ErrDatabase, str, err)
-	}
 	return nil
 }
 
@@ -1129,22 +1029,6 @@ func putAddress(tx walletdb.Tx, addressID []byte, row *dbAddressRow) error {
 		str := fmt.Sprintf("failed to store address %x", addressID)
 		return managerError(ErrDatabase, str, err)
 	}
-	// Save number of total addrs metadata
-	numAllAddrs, err := fetchNumAllAddresses(tx)
-	if err != nil {
-		return err
-	}
-	if err := putNumAllAddrs(tx, numAllAddrs+1); err != nil {
-		return err
-	}
-	// Save number of account addrs metadata
-	numAccountAddrs, err := fetchNumAccountAddrs(tx, row.account)
-	if err != nil {
-		return err
-	}
-	if err := putNumAccountAddrs(tx, row.account, numAccountAddrs+1); err != nil {
-		return err
-	}
 	// Update address account index
 	return putAddrAccountIndex(tx, row.account, addrHash[:])
 }
@@ -1276,22 +1160,11 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 		return nil, nil
 	}
 
-	numAccountAddrs, err := fetchNumAccountAddrs(tx, account)
-	if err != nil {
-		return nil, err
-	}
-
-	var addrs = make([]interface{}, numAccountAddrs)
-	i := 0
-	err = bucket.ForEach(func(k, v []byte) error {
+	var addrs []interface{}
+	err := bucket.ForEach(func(k, v []byte) error {
 		// Skip buckets.
 		if v == nil {
 			return nil
-		}
-		// Handle index out of range due to invalid metadata
-		if i > len(addrs)-1 {
-			str := "inconsistent address data stored in database"
-			return managerError(ErrDatabase, str, nil)
 		}
 		addrRow, err := fetchAddressByHash(tx, k)
 		if err != nil {
@@ -1304,8 +1177,7 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 			return err
 		}
 
-		addrs[i] = addrRow
-		i++
+		addrs = append(addrs, addrRow)
 		return nil
 	})
 	if err != nil {
@@ -1322,22 +1194,11 @@ func fetchAccountAddresses(tx walletdb.Tx, account uint32) ([]interface{}, error
 func fetchAllAddresses(tx walletdb.Tx) ([]interface{}, error) {
 	bucket := tx.RootBucket().Bucket(addrBucketName)
 
-	numAllAddrs, err := fetchNumAllAddresses(tx)
-	if err != nil {
-		return nil, err
-	}
-
-	var addrs = make([]interface{}, numAllAddrs)
-	i := 0
-	err = bucket.ForEach(func(k, v []byte) error {
+	var addrs []interface{}
+	err := bucket.ForEach(func(k, v []byte) error {
 		// Skip buckets.
 		if v == nil {
 			return nil
-		}
-		// Handle index out of range due to invalid metadata
-		if i > len(addrs)-1 {
-			str := "inconsistent address data stored in database"
-			return managerError(ErrDatabase, str, nil)
 		}
 
 		// Deserialize the address row first to determine the field
@@ -1353,8 +1214,7 @@ func fetchAllAddresses(tx walletdb.Tx) ([]interface{}, error) {
 			return err
 		}
 
-		addrs[i] = addrRow
-		i++
+		addrs = append(addrs, addrRow)
 		return nil
 	})
 	if err != nil {
@@ -1803,18 +1663,6 @@ func upgradeToVersion3(namespace walletdb.Namespace) error {
 
 		// Initialize metadata for all keys
 		if err := putLastAccount(tx, DefaultAccountNum); err != nil {
-			return err
-		}
-		if err := putNumAccounts(tx, 1); err != nil {
-			return err
-		}
-		if err := putNumAccountAddrs(tx, DefaultAccountNum, 0); err != nil {
-			return err
-		}
-		if err := putNumAccountAddrs(tx, ImportedAddrAccount, 0); err != nil {
-			return err
-		}
-		if err := putNumAllAddrs(tx, 0); err != nil {
 			return err
 		}
 

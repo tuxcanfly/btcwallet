@@ -1695,18 +1695,6 @@ func (m *Manager) NewAccount(name string) (uint32, error) {
 		if err := putLastAccount(tx, account); err != nil {
 			return err
 		}
-		// Save number of accounts metadata
-		numAccounts, err := fetchNumAccounts(tx)
-		if err != nil {
-			return err
-		}
-		if err := putNumAccounts(tx, numAccounts+1); err != nil {
-			return err
-		}
-		// Save number of account addrs metadata
-		if err := putNumAccountAddrs(tx, account, 0); err != nil {
-			return err
-		}
 		return nil
 	})
 	return account, err
