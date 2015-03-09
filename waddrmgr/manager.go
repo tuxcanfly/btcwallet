@@ -2414,8 +2414,14 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 		}
 
 		// Save the information for the default account to the database.
-		return putAccountInfo(tx, DefaultAccountNum, acctPubEnc,
+		err = putAccountInfo(tx, DefaultAccountNum, acctPubEnc,
 			acctPrivEnc, 0, 0, DefaultAccountName)
+		if err != nil {
+			return err
+		}
+
+		// Save "" alias for default account name for backward compat
+		return putAccountNameIndex(tx, DefaultAccountNum, "")
 	})
 	if err != nil {
 		return nil, maybeConvertDbError(err)
