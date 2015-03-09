@@ -1189,8 +1189,9 @@ func testNewAccount(tc *testContext) bool {
 func testLookupAccount(tc *testContext) bool {
 	// Lookup accounts created earlier in testNewAccount
 	expectedAccounts := map[string]uint32{
-		"default":   0,
-		"account-1": 1,
+		waddrmgr.DefaultAccountName:      waddrmgr.DefaultAccountNum,
+		"account-1":                      1,
+		waddrmgr.ImportedAddrAccountName: waddrmgr.ImportedAddrAccount,
 	}
 	if !tc.create {
 		// Existing wallet manager will have 2 accounts
