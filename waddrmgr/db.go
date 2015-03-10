@@ -1611,7 +1611,7 @@ func upgradeManager(namespace walletdb.Namespace) error {
 	// }
 
 	if version < 3 {
-		// Upgrade from version 1 to 3.
+		// Upgrade from version 2 to 3.
 		if err := upgradeToVersion3(namespace); err != nil {
 			return err
 		}
@@ -1633,7 +1633,7 @@ func upgradeManager(namespace walletdb.Namespace) error {
 	return nil
 }
 
-// upgradeToVersion3 upgrades the database from version 1 to version 3
+// upgradeToVersion3 upgrades the database from version 2 to version 3
 // The following buckets were introduced in version 3 to support account names:
 // * acctNameIdxBucketName
 // * acctIdIdxBucketName
@@ -1643,19 +1643,19 @@ func upgradeToVersion3(namespace walletdb.Namespace) error {
 		currentMgrVersion := uint32(3)
 		rootBucket := tx.RootBucket()
 
-		_, err := rootBucket.CreateBucketIfNotExists(acctNameIdxBucketName)
+		_, err := rootBucket.CreateBucket(acctNameIdxBucketName)
 		if err != nil {
 			str := "failed to create an account name index bucket"
 			return managerError(ErrDatabase, str, err)
 		}
 
-		_, err = rootBucket.CreateBucketIfNotExists(acctIdIdxBucketName)
+		_, err = rootBucket.CreateBucket(acctIdIdxBucketName)
 		if err != nil {
 			str := "failed to create an account id index bucket"
 			return managerError(ErrDatabase, str, err)
 		}
 
-		_, err = rootBucket.CreateBucketIfNotExists(metaBucketName)
+		_, err = rootBucket.CreateBucket(metaBucketName)
 		if err != nil {
 			str := "failed to create a meta bucket"
 			return managerError(ErrDatabase, str, err)
