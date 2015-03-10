@@ -189,20 +189,12 @@ func (w *Wallet) CreditAccount(c txstore.Credit) (uint32, error) {
 // with the given debits.
 // If no account is found, ErrAccountNotFound is returned.
 func (w *Wallet) DebitAccount(d txstore.Debits) (uint32, error) {
-	msgTx := d.Tx().MsgTx()
-	for _, txIn := range msgTx.TxIn {
-		op := txIn.PreviousOutPoint
-		record, ok := w.TxRecord(&op.Hash)
-		if !ok {
-			return 0, btcjson.ErrNoTxInfo
+	for _, c := range d.Credits() {
+		account, err := w.CreditAccount(c)
+		if err != nil {
+			return 0, err
 		}
-		for _, c := range record.Credits() {
-			account, err := w.CreditAccount(c)
-			if err != nil {
-				return 0, err
-			}
-			return account, nil
-		}
+		return account, nil
 	}
 	return 0, waddrmgr.ManagerError{
 		ErrorCode:   waddrmgr.ErrAccountNotFound,
