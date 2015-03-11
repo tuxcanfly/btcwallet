@@ -17,13 +17,21 @@
 package waddrmgr
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcwallet/walletdb"
 	"github.com/btcsuite/fastsha256"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 const (
@@ -1655,6 +1663,106 @@ func upgradeManager(namespace walletdb.Namespace) error {
 	return nil
 }
 
+func promptConsoleSeed(reader *bufio.Reader) ([]byte, error) {
+	for {
+		fmt.Print("Enter existing wallet seed: ")
+		seedStr, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		seedStr = strings.TrimSpace(strings.ToLower(seedStr))
+
+		seed, err := hex.DecodeString(seedStr)
+		if err != nil || len(seed) < hdkeychain.MinSeedBytes ||
+			len(seed) > hdkeychain.MaxSeedBytes {
+
+			fmt.Printf("Invalid seed specified.  Must be a "+
+				"hexadecimal value that is at least %d bits and "+
+				"at most %d bits\n", hdkeychain.MinSeedBytes*8,
+				hdkeychain.MaxSeedBytes*8)
+			continue
+		}
+
+		return seed, nil
+	}
+}
+
+func promptConsoleList(reader *bufio.Reader, prefix string, validResponses []string, defaultEntry string) (string, error) {
+	// Setup the prompt according to the parameters.
+	validStrings := strings.Join(validResponses, "/")
+	var prompt string
+	if defaultEntry != "" {
+		prompt = fmt.Sprintf("%s (%s) [%s]: ", prefix, validStrings,
+			defaultEntry)
+	} else {
+		prompt = fmt.Sprintf("%s (%s): ", prefix, validStrings)
+	}
+
+	// Prompt the user until one of the valid responses is given.
+	for {
+		fmt.Print(prompt)
+		reply, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		reply = strings.TrimSpace(strings.ToLower(reply))
+		if reply == "" {
+			reply = defaultEntry
+		}
+
+		for _, validResponse := range validResponses {
+			if reply == validResponse {
+				return reply, nil
+			}
+		}
+	}
+}
+
+func promptConsoleListBool(reader *bufio.Reader, prefix string, defaultEntry string) (bool, error) {
+	// Setup the valid responses.
+	valid := []string{"n", "no", "y", "yes"}
+	response, err := promptConsoleList(reader, prefix, valid, defaultEntry)
+	if err != nil {
+		return false, err
+	}
+	return response == "yes" || response == "y", nil
+}
+
+func promptConsolePass(reader *bufio.Reader, prefix string, confirm bool) ([]byte, error) {
+	// Prompt the user until they enter a passphrase.
+	prompt := fmt.Sprintf("%s: ", prefix)
+	for {
+		fmt.Print(prompt)
+		pass, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+		if err != nil {
+			return nil, err
+		}
+		fmt.Print("\n")
+		pass = bytes.TrimSpace(pass)
+		if len(pass) == 0 {
+			continue
+		}
+
+		if !confirm {
+			return pass, nil
+		}
+
+		fmt.Print("Confirm passphrase: ")
+		confirm, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+		if err != nil {
+			return nil, err
+		}
+		fmt.Print("\n")
+		confirm = bytes.TrimSpace(confirm)
+		if !bytes.Equal(pass, confirm) {
+			fmt.Println("The entered passphrases do not match")
+			continue
+		}
+
+		return pass, nil
+	}
+}
+
 // upgradeToVersion3 upgrades the database from version 2 to version 3
 // The following buckets were introduced in version 3 to support account names:
 // * acctNameIdxBucketName
@@ -1665,7 +1773,82 @@ func upgradeToVersion3(namespace walletdb.Namespace) error {
 		currentMgrVersion := uint32(3)
 		rootBucket := tx.RootBucket()
 
-		_, err := rootBucket.CreateBucket(acctNameIdxBucketName)
+		reader := bufio.NewReader(os.Stdin)
+
+		seed, err := promptConsoleSeed(reader)
+		if err != nil {
+			return err
+		}
+
+		privPassPhrase, err := promptConsolePass(reader, "Enter the private passphrase of your wallet", false)
+		if err != nil {
+			return err
+		}
+		pubPassPhrase := []byte("public")
+		usePubPass, err := promptConsoleListBool(reader, "Did you choose "+
+			"to add an additional layer of encryption for public "+
+			"data?", "no")
+		if err != nil {
+			return err
+		}
+		if usePubPass {
+			pubPassPhrase, err = promptConsolePass(reader, "Enter the public passphrase of your wallet", false)
+			if err != nil {
+				return err
+			}
+		}
+
+		woMgr, err := loadManager(namespace, pubPassPhrase, &chaincfg.SimNetParams, nil)
+		if err != nil {
+			return err
+		}
+		defer woMgr.Close()
+
+		err = woMgr.Unlock(privPassPhrase)
+		if err != nil {
+			return err
+		}
+
+		// Derive the master extended key from the seed.
+		root, err := hdkeychain.NewMaster(seed)
+		if err != nil {
+			str := "failed to derive master extended key"
+			return managerError(ErrKeyChain, str, err)
+		}
+
+		// Derive the cointype key according to BIP0044.
+		coinTypeKeyPriv, err := deriveCoinTypeKey(root, chaincfg.SimNetParams.HDCoinType)
+		if err != nil {
+			str := "failed to derive cointype extended key"
+			return managerError(ErrKeyChain, str, err)
+		}
+
+		cryptoKeyPub := woMgr.cryptoKeyPub
+		cryptoKeyPriv := woMgr.cryptoKeyPriv
+		// Encrypt the cointype keys with the associated crypto keys.
+		coinTypeKeyPub, err := coinTypeKeyPriv.Neuter()
+		if err != nil {
+			str := "failed to convert cointype private key"
+			return managerError(ErrKeyChain, str, err)
+		}
+		coinTypePubEnc, err := cryptoKeyPub.Encrypt([]byte(coinTypeKeyPub.String()))
+		if err != nil {
+			str := "failed to encrypt cointype public key"
+			return managerError(ErrCrypto, str, err)
+		}
+		coinTypePrivEnc, err := cryptoKeyPriv.Encrypt([]byte(coinTypeKeyPriv.String()))
+		if err != nil {
+			str := "failed to encrypt cointype private key"
+			return managerError(ErrCrypto, str, err)
+		}
+
+		// Save the encrypted cointype keys to the database.
+		err = putCoinTypeKeys(tx, coinTypePubEnc, coinTypePrivEnc)
+		if err != nil {
+			return err
+		}
+
+		_, err = rootBucket.CreateBucket(acctNameIdxBucketName)
 		if err != nil {
 			str := "failed to create an account name index bucket"
 			return managerError(ErrDatabase, str, err)
@@ -1685,6 +1868,21 @@ func upgradeToVersion3(namespace walletdb.Namespace) error {
 
 		// Initialize metadata for all keys
 		if err := putLastAccount(tx, DefaultAccountNum); err != nil {
+			return err
+		}
+
+		// Update default account indexes
+		if err := putAccountIdIndex(tx, DefaultAccountNum, DefaultAccountName); err != nil {
+			return err
+		}
+		if err := putAccountNameIndex(tx, DefaultAccountNum, DefaultAccountName); err != nil {
+			return err
+		}
+		// Update imported account indexes
+		if err := putAccountIdIndex(tx, ImportedAddrAccount, ImportedAddrAccountName); err != nil {
+			return err
+		}
+		if err := putAccountNameIndex(tx, ImportedAddrAccount, ImportedAddrAccountName); err != nil {
 			return err
 		}
 
