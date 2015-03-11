@@ -1543,7 +1543,29 @@ func createManagerNS(namespace walletdb.Namespace) error {
 			return managerError(ErrDatabase, str, err)
 		}
 
-		if err := putManagerVersion(tx, 1); err != nil {
+		_, err = rootBucket.CreateBucket(acctNameIdxBucketName)
+		if err != nil {
+			str := "failed to create an account name index bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		_, err = rootBucket.CreateBucket(acctIdIdxBucketName)
+		if err != nil {
+			str := "failed to create an account id index bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		_, err = rootBucket.CreateBucket(metaBucketName)
+		if err != nil {
+			str := "failed to create a meta bucket"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		if err := putLastAccount(tx, DefaultAccountNum); err != nil {
+			return err
+		}
+
+		if err := putManagerVersion(tx, latestMgrVersion); err != nil {
 			return err
 		}
 
