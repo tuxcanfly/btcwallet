@@ -26,12 +26,11 @@ import (
 	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcwallet/walletdb"
 	"github.com/btcsuite/fastsha256"
-	"golang.org/x/crypto/ripemd160"
 )
 
 const (
 	// LatestMgrVersion is the most recent manager version.
-	LatestMgrVersion = 3
+	LatestMgrVersion = 4
 )
 
 var (
@@ -77,10 +76,9 @@ type addressType uint8
 
 // These constants define the various supported address types.
 const (
-	adtChain    addressType = 0 // not iota as they need to be stable for db
-	adtImport   addressType = 1
-	adtScript   addressType = 2
-	adtWatching addressType = 3
+	adtChain  addressType = 0 // not iota as they need to be stable for db
+	adtImport addressType = 1
+	adtScript addressType = 2
 )
 
 // falseByte and trueByte are consts used to serialize boolean values.
@@ -99,7 +97,7 @@ func boolAsByte(b bool) byte {
 
 // byteAsBool converts a byte to a bool.
 func byteAsBool(b byte) bool {
-	return b != 0
+	return b != falseByte
 }
 
 // accountType represents a type of address stored in the database.
@@ -109,9 +107,6 @@ type accountType uint8
 const (
 	actBIP0044 accountType = 0 // not iota as they need to be stable for db
 )
-
-// encryptedHash160Size is the size of an encrypted Hash160 address.
-const encryptedHash160Size = ripemd160.Size * 3
 
 // dbAccountRow houses information stored about an account in the database.
 type dbAccountRow struct {
@@ -150,19 +145,13 @@ type dbChainAddressRow struct {
 	index  uint32
 }
 
-// dbImportedHash160AddressRow houses additional information stored about an imported
-// P2PKH address in the database.
-type dbImportedHash160AddressRow struct {
-	dbAddressRow
-	encryptedHash160 []byte
-}
-
-// dbImportedPubKeyAddressRow houses additional information stored about an imported
+// dbImportedAddressRow houses additional information stored about an imported
 // public key address in the database.
-type dbImportedPubKeyAddressRow struct {
+type dbImportedAddressRow struct {
 	dbAddressRow
-	encryptedPubKey  []byte
-	encryptedPrivKey []byte
+	encryptedPubKeyHash []byte
+	encryptedPubKey     []byte
+	encryptedPrivKey    []byte
 }
 
 // dbImportedAddressRow houses additional information stored about a script
@@ -866,7 +855,6 @@ func deserializeAddressRow(serializedAddress []byte) (*dbAddressRow, error) {
 func serializeAddressRow(row *dbAddressRow) []byte {
 	// The serialized address format is:
 	//   <addrType><account><addedTime><syncStatus><watchingOnly><rawdata>
-	//   <rawdata>
 	//
 	// 1 byte addrType + 4 bytes account + 8 bytes addTime + 1 byte
 	// syncStatus + 1 byte watchingOnly + 4 bytes raw data length + raw data
@@ -917,89 +905,66 @@ func serializeChainedAddress(branch, index uint32) []byte {
 	return rawData
 }
 
-// deserializeImportedHash160AddressRow deserializes the raw data from the passed address
-// row as an imported hash 160 address.
-func deserializeImportedHash160AddressRow(row *dbAddressRow) (*dbImportedHash160AddressRow, error) {
+// deserializeImportedAddress deserializes the raw data from the passed address
+// row as an imported address.
+func deserializeImportedAddress(row *dbAddressRow) (*dbImportedAddressRow, error) {
 	// The serialized imported address raw data format is:
-	//   <enchash160>
+	//   <encpkhashlen><encpkhash><encpubkeylen><encpubkey>
+	//   <encprivkeylen><encprivkey>
 	//
-	//  encrypted hash160 (ripemd160*3 = 60 bytes)
-
-	if len(row.rawData) < encryptedHash160Size {
-		str := "malformed serialized imported address"
-		return nil, managerError(ErrDatabase, str, nil)
-	}
-
-	retRow := dbImportedHash160AddressRow{
-		dbAddressRow: *row,
-	}
-
-	retRow.encryptedHash160 = make([]byte, encryptedHash160Size)
-	copy(retRow.encryptedHash160, row.rawData)
-	return &retRow, nil
-}
-
-// serializeImportedHash160AddressRow returns the serialization of the raw data field for
-// an imported hash 160 address.
-func serializeImportedHash160AddressRow(encryptedHash160 []byte) []byte {
-	// The serialized imported address raw data format is:
-	//   <enchash160>
-	//
-	//  encrypted hash160 (ripemd160*3 = 60 bytes)
-
-	rawData := make([]byte, 8+encryptedHash160Size)
-	copy(rawData, encryptedHash160)
-	return rawData
-}
-
-// deserializeImportedPubKeyAddress deserializes the raw data from the passed address
-// row as an imported pubkey address.
-func deserializeImportedPubKeyAddress(row *dbAddressRow) (*dbImportedPubKeyAddressRow, error) {
-	// The serialized imported address raw data format is:
-	//   <encpubkeylen><encpubkey><encprivkeylen><encprivkey>
-	//
+	// 4 bytes encrypted pkhash len + encrypted pkhash +
 	// 4 bytes encrypted pubkey len + encrypted pubkey +
 	// 4 bytes encrypted privkey len + encrypted privkey
 
 	// Given the above, the length of the entry must be at a minimum
 	// the constant value sizes.
-	if len(row.rawData) < 8 {
+	if len(row.rawData) < 12 {
 		str := "malformed serialized imported address"
 		return nil, managerError(ErrDatabase, str, nil)
 	}
 
-	retRow := dbImportedPubKeyAddressRow{
+	retRow := dbImportedAddressRow{
 		dbAddressRow: *row,
 	}
 
-	pubLen := binary.LittleEndian.Uint32(row.rawData[0:4])
-	retRow.encryptedPubKey = make([]byte, pubLen)
-	copy(retRow.encryptedPubKey, row.rawData[4:4+pubLen])
+	pkHashLen := binary.LittleEndian.Uint32(row.rawData[0:4])
+	retRow.encryptedPubKeyHash = make([]byte, pkHashLen)
+	copy(retRow.encryptedPubKeyHash, row.rawData[4:4+pkHashLen])
 
-	privLen := binary.LittleEndian.Uint32(row.rawData[4+pubLen : 8+pubLen])
+	pubLen := binary.LittleEndian.Uint32(row.rawData[4+pkHashLen : 8+pkHashLen])
+	retRow.encryptedPubKey = make([]byte, pubLen)
+	copy(retRow.encryptedPubKey, row.rawData[8+pkHashLen:8+pkHashLen+pubLen])
+
+	privLen := binary.LittleEndian.Uint32(row.rawData[8+pkHashLen+pubLen : 12+pkHashLen+pubLen])
 	retRow.encryptedPrivKey = make([]byte, privLen)
-	copy(retRow.encryptedPrivKey, row.rawData[8+pubLen:8+pubLen+privLen])
+	copy(retRow.encryptedPrivKey, row.rawData[12+pkHashLen+pubLen:12+pkHashLen+pubLen+privLen])
 
 	return &retRow, nil
 }
 
-// serializeImportedPubKeyAddress returns the serialization of the raw data field for
+// serializeImportedAddress returns the serialization of the raw data field for
 // an imported address.
-func serializeImportedPubKeyAddress(encryptedPKHash, encryptedPubKey, encryptedPrivKey []byte) []byte {
+func serializeImportedAddress(encryptedPubKeyHash, encryptedPubKey, encryptedPrivKey []byte) []byte {
 	// The serialized imported address raw data format is:
-	//   <encpubkeylen><encpubkey><encprivkeylen><encprivkey>
+	//   <encpkhashlen><encpkhash><encpubkeylen><encpubkey>
+	//   <encprivkeylen><encprivkey>
 	//
+	// 4 bytes encrypted pkhash len + encrypted pkhash +
 	// 4 bytes encrypted pubkey len + encrypted pubkey +
 	// 4 bytes encrypted privkey len + encrypted privkey
+	pkHashLen := uint32(len(encryptedPubKeyHash))
 	pubLen := uint32(len(encryptedPubKey))
 	privLen := uint32(len(encryptedPrivKey))
-	rawData := make([]byte, 8+pubLen+privLen)
+	rawData := make([]byte, 12+pkHashLen+pubLen+privLen)
 
-	binary.LittleEndian.PutUint32(rawData[0:4], pubLen)
-	copy(rawData[4:4+pubLen], encryptedPubKey)
+	binary.LittleEndian.PutUint32(rawData[0:4], pkHashLen)
+	copy(rawData[4:4+pkHashLen], encryptedPubKeyHash)
 
-	binary.LittleEndian.PutUint32(rawData[4+pubLen:8+pubLen], privLen)
-	copy(rawData[8+pubLen:8+pubLen+privLen], encryptedPrivKey)
+	binary.LittleEndian.PutUint32(rawData[4+pkHashLen:8+pkHashLen], pubLen)
+	copy(rawData[8+pkHashLen:8+pkHashLen+pubLen], encryptedPubKey)
+
+	binary.LittleEndian.PutUint32(rawData[8+pkHashLen+pubLen:12+pkHashLen+pubLen], privLen)
+	copy(rawData[12+pkHashLen+pubLen:12+pkHashLen+pubLen+privLen], encryptedPrivKey)
 
 	return rawData
 }
@@ -1092,11 +1057,9 @@ func fetchAddressByHash(tx walletdb.Tx, addrHash []byte) (interface{}, error) {
 	case adtChain:
 		return deserializeChainedAddress(row)
 	case adtImport:
-		return deserializeImportedPubKeyAddress(row)
+		return deserializeImportedAddress(row)
 	case adtScript:
 		return deserializeScriptAddress(row)
-	case adtWatching:
-		return deserializeImportedHash160AddressRow(row)
 	}
 
 	str := fmt.Sprintf("unsupported address type '%d'", row.addrType)
@@ -1205,40 +1168,6 @@ func putChainedAddress(tx walletdb.Tx, addressID []byte, account uint32,
 	return nil
 }
 
-// putImportedPubKeyAddress stores the provided imported address information to the
-// database.
-func putImportedPubKeyAddress(tx walletdb.Tx, addressID []byte, account uint32,
-	status syncStatus, watchingOnly bool, encryptedPKHash, encryptedPubKey, encryptedPrivKey []byte) error {
-
-	rawData := serializeImportedPubKeyAddress(encryptedPKHash, encryptedPubKey, encryptedPrivKey)
-	addrRow := dbAddressRow{
-		addrType:     adtImport,
-		account:      account,
-		addTime:      uint64(time.Now().Unix()),
-		syncStatus:   status,
-		watchingOnly: watchingOnly,
-		rawData:      rawData,
-	}
-	return putAddress(tx, addressID, &addrRow)
-}
-
-// putImportedHash160Address stores the provided imported address information to the
-// database.
-func putImportedHash160Address(tx walletdb.Tx, addressID []byte, account uint32,
-	status syncStatus, encryptedHash160 []byte) error {
-
-	rawData := serializeImportedHash160AddressRow(encryptedHash160)
-	addrRow := dbAddressRow{
-		addrType:     adtWatching,
-		account:      account,
-		addTime:      uint64(time.Now().Unix()),
-		syncStatus:   status,
-		watchingOnly: true,
-		rawData:      rawData,
-	}
-	return putAddress(tx, addressID, &addrRow)
-}
-
 // putScriptAddress stores the provided script address information to the
 // database.
 func putScriptAddress(tx walletdb.Tx, addressID []byte, account uint32,
@@ -1258,6 +1187,23 @@ func putScriptAddress(tx walletdb.Tx, addressID []byte, account uint32,
 	}
 
 	return nil
+}
+
+// putImportedAddress stores the provided imported address information to the
+// database.
+func putImportedAddress(tx walletdb.Tx, addressID []byte, account uint32,
+	status syncStatus, watchingOnly bool, encryptedPubKeyHash, encryptedPubKey, encryptedPrivKey []byte) error {
+
+	rawData := serializeImportedAddress(encryptedPubKeyHash, encryptedPubKey, encryptedPrivKey)
+	addrRow := dbAddressRow{
+		addrType:     adtImport,
+		account:      account,
+		addTime:      uint64(time.Now().Unix()),
+		syncStatus:   status,
+		watchingOnly: watchingOnly,
+		rawData:      rawData,
+	}
+	return putAddress(tx, addressID, &addrRow)
 }
 
 // existsAddress returns whether or not the address id exists in the database.
@@ -1445,15 +1391,15 @@ func deletePrivateKeys(tx walletdb.Tx) error {
 
 		switch row.addrType {
 		case adtImport:
-			irow, err := deserializeImportedPubKeyAddress(row)
+			irow, err := deserializeImportedAddress(row)
 			if err != nil {
 				return err
 			}
 
 			// Reserialize the imported address without the private
 			// key and store it.
-			row.rawData = serializeImportedPubKeyAddress(nil,
-				irow.encryptedPubKey, nil)
+			row.rawData = serializeImportedAddress(
+				nil, irow.encryptedPubKey, nil)
 			err = bucket.Put(k, serializeAddressRow(row))
 			if err != nil {
 				str := "failed to delete imported private key"
@@ -1756,96 +1702,6 @@ func upgradeToVersion2(namespace walletdb.Namespace) error {
 	return nil
 }
 
-// upgradeManager upgrades the data in the provided manager namespace to newer
-// versions as neeeded.
-func upgradeManager(namespace walletdb.Namespace, pubPassPhrase []byte, config *Options) error {
-	var version uint32
-	err := namespace.View(func(tx walletdb.Tx) error {
-		var err error
-		version, err = fetchManagerVersion(tx)
-		return err
-	})
-	if err != nil {
-		str := "failed to fetch version for update"
-		return managerError(ErrDatabase, str, err)
-	}
-
-	// NOTE: There are currently no upgrades, but this is provided here as a
-	// template for how to properly do upgrades.  Each function to upgrade
-	// to the next version must include serializing the new version as a
-	// part of the same transaction so any failures in upgrades to later
-	// versions won't leave the database in an inconsistent state.  The
-	// putManagerVersion function provides a convenient mechanism for that
-	// purpose.
-	//
-	// Upgrade one version at a time so it is possible to upgrade across
-	// an aribtary number of versions without needing to write a bunch of
-	// additional code to go directly from version X to Y.
-	// if version < 2 {
-	// 	// Upgrade from version 1 to 2.
-	//	if err := upgradeToVersion2(namespace); err != nil {
-	//		return err
-	//	}
-	//
-	//	// The manager is now at version 2.
-	//	version = 2
-	// }
-	// if version < 3 {
-	// 	// Upgrade from version 2 to 3.
-	//	if err := upgradeToVersion3(namespace); err != nil {
-	//		return err
-	//	}
-	//
-	//	// The manager is now at version 3.
-	//	version = 3
-	// }
-
-	if version < 2 {
-		// Upgrade from version 1 to 2.
-		if err := upgradeToVersion2(namespace); err != nil {
-			return err
-		}
-
-		// The manager is now at version 2.
-		version = 2
-	}
-
-	if version < 3 {
-		if config.ObtainSeed == nil || config.ObtainPrivatePass == nil {
-			str := "failed to obtain seed and private passphrase required for upgrade"
-			return managerError(ErrDatabase, str, err)
-		}
-
-		seed, err := config.ObtainSeed()
-		if err != nil {
-			return err
-		}
-		privPassPhrase, err := config.ObtainPrivatePass()
-		if err != nil {
-			return err
-		}
-		// Upgrade from version 2 to 3.
-		if err := upgradeToVersion3(namespace, seed, privPassPhrase, pubPassPhrase); err != nil {
-			return err
-		}
-
-		// The manager is now at version 3.
-		version = 3
-	}
-
-	// Ensure the manager is upraded to the latest version.  This check is
-	// to intentionally cause a failure if the manager version is updated
-	// without writing code to handle the upgrade.
-	if version < latestMgrVersion {
-		str := fmt.Sprintf("the latest manager version is %d, but the "+
-			"current version after upgrades is only %d",
-			latestMgrVersion, version)
-		return managerError(ErrUpgrade, str, nil)
-	}
-
-	return nil
-}
-
 // upgradeToVersion3 upgrades the database from version 2 to version 3
 // The following buckets were introduced in version 3 to support account names:
 // * acctNameIdxBucketName
@@ -1955,5 +1811,165 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPa
 	if err != nil {
 		return maybeConvertDbError(err)
 	}
+	return nil
+}
+
+// upgradeToVersion4 upgrades the database from version 3 to version 4
+// The following fields were added to the serialized address row:
+// * 'watchingOnly' - boolean indicating whether the address is watching-only
+// * 'encryptedPubKeyHash' - encrypted pubkey hash of imported p2pkh address
+func upgradeToVersion4(namespace walletdb.Namespace) error {
+	err := namespace.Update(func(tx walletdb.Tx) error {
+		currentMgrVersion := uint32(4)
+		bucket := tx.RootBucket().Bucket(addrBucketName)
+
+		err := bucket.ForEach(func(k, v []byte) error {
+			// Skip buckets.
+			if v == nil {
+				return nil
+			}
+
+			// Insert watchingOnly bool at byte 14
+			// Since importing watching-only addrs was added in this version we
+			// can safely initialize this to falseByte
+			x := make([]byte, len(v)+1)
+			copy(x[:13], v[:13])
+			x[14] = falseByte
+			copy(x[15:], v[14:])
+
+			addrType := addressType(x[0])
+
+			// Update imported private key addresses for encryptedPubKeyHash field
+			switch addrType {
+			case adtImport:
+				// Insert nil for encrypted pkhash in rawData
+				rdlen := binary.LittleEndian.Uint32(x[15:19])
+				binary.LittleEndian.PutUint32(x[15:19], uint32(rdlen+4))
+				rawData := make([]byte, rdlen+4)
+				copy(rawData, x[19:])
+				binary.LittleEndian.PutUint32(x[19:23], 0)
+				copy(x[23:], rawData)
+			}
+
+			err := bucket.Put(k, x)
+			if err != nil {
+				str := "failed to update address"
+				return managerError(ErrDatabase, str, err)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := putManagerVersion(tx, currentMgrVersion); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return maybeConvertDbError(err)
+	}
+	return nil
+}
+
+// upgradeManager upgrades the data in the provided manager namespace to newer
+// versions as neeeded.
+func upgradeManager(namespace walletdb.Namespace, pubPassPhrase []byte, config *Options) error {
+	var version uint32
+	err := namespace.View(func(tx walletdb.Tx) error {
+		var err error
+		version, err = fetchManagerVersion(tx)
+		return err
+	})
+	if err != nil {
+		str := "failed to fetch version for update"
+		return managerError(ErrDatabase, str, err)
+	}
+
+	// NOTE: There are currently no upgrades, but this is provided here as a
+	// template for how to properly do upgrades.  Each function to upgrade
+	// to the next version must include serializing the new version as a
+	// part of the same transaction so any failures in upgrades to later
+	// versions won't leave the database in an inconsistent state.  The
+	// putManagerVersion function provides a convenient mechanism for that
+	// purpose.
+	//
+	// Upgrade one version at a time so it is possible to upgrade across
+	// an aribtary number of versions without needing to write a bunch of
+	// additional code to go directly from version X to Y.
+	// if version < 2 {
+	// 	// Upgrade from version 1 to 2.
+	//	if err := upgradeToVersion2(namespace); err != nil {
+	//		return err
+	//	}
+	//
+	//	// The manager is now at version 2.
+	//	version = 2
+	// }
+	// if version < 3 {
+	// 	// Upgrade from version 2 to 3.
+	//	if err := upgradeToVersion3(namespace); err != nil {
+	//		return err
+	//	}
+	//
+	//	// The manager is now at version 3.
+	//	version = 3
+	// }
+
+	if version < 2 {
+		// Upgrade from version 1 to 2.
+		if err := upgradeToVersion2(namespace); err != nil {
+			return err
+		}
+
+		// The manager is now at version 2.
+		version = 2
+	}
+
+	if version < 3 {
+		if config.ObtainSeed == nil || config.ObtainPrivatePass == nil {
+			str := "failed to obtain seed and private passphrase required for upgrade"
+			return managerError(ErrDatabase, str, err)
+		}
+
+		seed, err := config.ObtainSeed()
+		if err != nil {
+			return err
+		}
+		privPassPhrase, err := config.ObtainPrivatePass()
+		if err != nil {
+			return err
+		}
+		// Upgrade from version 2 to 3.
+		if err := upgradeToVersion3(namespace, seed, privPassPhrase, pubPassPhrase); err != nil {
+			return err
+		}
+
+		// The manager is now at version 3.
+		version = 3
+	}
+
+	if version < 4 {
+		// Upgrade from version 3 to 4.
+		if err := upgradeToVersion4(namespace); err != nil {
+			return err
+		}
+
+		// The manager is now at version 4.
+		version = 4
+	}
+
+	// Ensure the manager is upraded to the latest version.  This check is
+	// to intentionally cause a failure if the manager version is updated
+	// without writing code to handle the upgrade.
+	if version < latestMgrVersion {
+		str := fmt.Sprintf("the latest manager version is %d, but the "+
+			"current version after upgrades is only %d",
+			latestMgrVersion, version)
+		return managerError(ErrUpgrade, str, nil)
+	}
+
 	return nil
 }

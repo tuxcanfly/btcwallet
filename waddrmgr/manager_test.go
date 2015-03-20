@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
@@ -121,31 +122,33 @@ func testManagedPubKeyAddress(tc *testContext, prefix string, gotAddr waddrmgr.M
 	// Ensure private key is the expected value for the managed address.
 	// Since this is only available when the manager is unlocked, also check
 	// for the expected error when the manager is locked.
-	gotPrivKey, err := gotAddr.PrivKey()
-	switch {
-	case tc.watchingOnly:
-		// Confirm expected watching-only error.
-		testName := fmt.Sprintf("%s PrivKey", prefix)
-		if !checkManagerError(tc.t, testName, err, waddrmgr.ErrWatchingOnly) {
-			return false
-		}
-	case tc.unlocked:
-		if err != nil {
-			tc.t.Errorf("%s PrivKey: unexpected error - got %v",
-				prefix, err)
-			return false
-		}
-		gpriv := gotPrivKey.Serialize()
-		if !reflect.DeepEqual(gpriv, wantAddr.privKey) {
-			tc.t.Errorf("%s PrivKey: unexpected private key - "+
-				"got %x, want %x", prefix, gpriv, wantAddr.privKey)
-			return false
-		}
-	default:
-		// Confirm expected locked error.
-		testName := fmt.Sprintf("%s PrivKey", prefix)
-		if !checkManagerError(tc.t, testName, err, waddrmgr.ErrLocked) {
-			return false
+	if wantAddr.privKey != nil {
+		gotPrivKey, err := gotAddr.PrivKey()
+		switch {
+		case tc.watchingOnly:
+			// Confirm expected watching-only error.
+			testName := fmt.Sprintf("%s PrivKey", prefix)
+			if !checkManagerError(tc.t, testName, err, waddrmgr.ErrWatchingOnly) {
+				return false
+			}
+		case tc.unlocked:
+			if err != nil {
+				tc.t.Errorf("%s PrivKey: unexpected error - got %v",
+					prefix, err)
+				return false
+			}
+			gpriv := gotPrivKey.Serialize()
+			if !reflect.DeepEqual(gpriv, wantAddr.privKey) {
+				tc.t.Errorf("%s PrivKey: unexpected private key - "+
+					"got %x, want %x", prefix, gpriv, wantAddr.privKey)
+				return false
+			}
+		default:
+			// Confirm expected locked error.
+			testName := fmt.Sprintf("%s PrivKey", prefix)
+			if !checkManagerError(tc.t, testName, err, waddrmgr.ErrLocked) {
+				return false
+			}
 		}
 	}
 
@@ -153,31 +156,33 @@ func testManagedPubKeyAddress(tc *testContext, prefix string, gotAddr waddrmgr.M
 	// expected value for the managed address.  Since this is only available
 	// when the manager is unlocked, also check for the expected error when
 	// the manager is locked.
-	gotWIF, err := gotAddr.ExportPrivKey()
-	switch {
-	case tc.watchingOnly:
-		// Confirm expected watching-only error.
-		testName := fmt.Sprintf("%s ExportPrivKey", prefix)
-		if !checkManagerError(tc.t, testName, err, waddrmgr.ErrWatchingOnly) {
-			return false
-		}
-	case tc.unlocked:
-		if err != nil {
-			tc.t.Errorf("%s ExportPrivKey: unexpected error - "+
-				"got %v", prefix, err)
-			return false
-		}
-		if gotWIF.String() != wantAddr.privKeyWIF {
-			tc.t.Errorf("%s ExportPrivKey: unexpected WIF - got "+
-				"%v, want %v", prefix, gotWIF.String(),
-				wantAddr.privKeyWIF)
-			return false
-		}
-	default:
-		// Confirm expected locked error.
-		testName := fmt.Sprintf("%s ExportPrivKey", prefix)
-		if !checkManagerError(tc.t, testName, err, waddrmgr.ErrLocked) {
-			return false
+	if wantAddr.privKey != nil {
+		gotWIF, err := gotAddr.ExportPrivKey()
+		switch {
+		case tc.watchingOnly:
+			// Confirm expected watching-only error.
+			testName := fmt.Sprintf("%s ExportPrivKey", prefix)
+			if !checkManagerError(tc.t, testName, err, waddrmgr.ErrWatchingOnly) {
+				return false
+			}
+		case tc.unlocked:
+			if err != nil {
+				tc.t.Errorf("%s ExportPrivKey: unexpected error - "+
+					"got %v", prefix, err)
+				return false
+			}
+			if gotWIF.String() != wantAddr.privKeyWIF {
+				tc.t.Errorf("%s ExportPrivKey: unexpected WIF - got "+
+					"%v, want %v", prefix, gotWIF.String(),
+					wantAddr.privKeyWIF)
+				return false
+			}
+		default:
+			// Confirm expected locked error.
+			testName := fmt.Sprintf("%s ExportPrivKey", prefix)
+			if !checkManagerError(tc.t, testName, err, waddrmgr.ErrLocked) {
+				return false
+			}
 		}
 	}
 
@@ -718,14 +723,14 @@ func testLocking(tc *testContext) bool {
 	return true
 }
 
-// testImportAddress tests that importing addresses works properly.  It
+// testImportPublicKey tests that importing addresses works properly.  It
 // ensures they can be retrieved by Address after they have been imported and
 // the addresses give the expected values when the manager is locked and
 // unlocked.
 //
 // This function expects the manager is already locked when called and returns
 // with the manager locked.
-func testImportAddress(tc *testContext) bool {
+func testImportPublicKey(tc *testContext) bool {
 	tests := []struct {
 		name       string
 		in         string
@@ -734,14 +739,14 @@ func testImportAddress(tc *testContext) bool {
 	}{
 		{
 			name: "simple p2pkh address",
-			in:   "1BBep4Pj5ZvpVBVMM9XtTWLzEdbZGFNFyc",
+			in:   "1JLv4miwKGsCeUuTSnBnji52ncZGEVNZjd",
 			expected: expectedAddr{
-				address:     "1BBep4Pj5ZvpVBVMM9XtTWLzEdbZGFNFyc",
-				addressHash: hexToBytes("6fb4fb14a4423010512aba9121aeaf23857d2409"),
+				address:     "1JLv4miwKGsCeUuTSnBnji52ncZGEVNZjd",
+				addressHash: hexToBytes("be3e568a1fc5b22a61af3aadb53dff30c22ae97f"),
 				internal:    false,
 				imported:    true,
-				compressed:  false,
-				pubKey:      nil,
+				compressed:  true,
+				pubKey:      hexToBytes("03562d206cc133e83316ee8b8f0b328c854e4877b8df207aa4e0328cf8ee684595"),
 				privKey:     nil,
 			},
 		},
@@ -760,25 +765,24 @@ func testImportAddress(tc *testContext) bool {
 	// Only import the addresses when in the create phase of testing.
 	net := tc.manager.ChainParams()
 	tc.account = waddrmgr.ImportedAddrAccount
-	prefix := testNamePrefix(tc) + " testImportAddress"
+	prefix := testNamePrefix(tc) + " testImportPublicKey"
 	if tc.create {
 		for i, test := range tests {
-			test.expected.address = test.in
-			addr, err := btcutil.DecodeAddress(test.in, net)
+			pubKey, err := btcec.ParsePubKey(test.expected.pubKey, btcec.S256())
 			if err != nil {
-				tc.t.Errorf("%s DecodeAddress #%d (%s): unexpected "+
-					"error: %v", prefix, i, test.name, err)
-				continue
+				tc.t.Errorf("%s: unexpected error: %v", prefix,
+					err)
+				return false
 			}
-			maddr, err := tc.manager.ImportAddress(addr,
+			maddr, err := tc.manager.ImportPublicKey(pubKey,
 				&test.blockstamp)
 			if err != nil {
-				tc.t.Errorf("%s ImportAddress #%d (%s): "+
+				tc.t.Errorf("%s ImportPublicKey #%d (%s): "+
 					"unexpected error: %v", prefix, i,
 					test.name, err)
 				continue
 			}
-			if !testAddress(tc, prefix+" ImportAddress", maddr,
+			if !testAddress(tc, prefix+" ImportPublicKey", maddr,
 				&test.expected) {
 				continue
 			}
@@ -790,22 +794,16 @@ func testImportAddress(tc *testContext) bool {
 	testResults := func() bool {
 		failed := false
 		for i, test := range tests {
-			test.expected.address = test.in
-
-			// Use the Address API to retrieve each of the expected
-			// new addresses and ensure they're accurate.
-			utilAddr, err := btcutil.NewAddressPubKeyHash(
-				test.expected.addressHash, net)
+			addr, err := btcutil.NewAddressPubKeyHash(test.expected.addressHash, net)
 			if err != nil {
 				tc.t.Errorf("%s NewAddressPubKeyHash #%d (%s): "+
 					"unexpected error: %v", prefix, i,
 					test.name, err)
-				failed = true
 				continue
 			}
 			taPrefix := fmt.Sprintf("%s Address #%d (%s)", prefix,
 				i, test.name)
-			ma, err := tc.manager.Address(utilAddr)
+			ma, err := tc.manager.Address(addr)
 			if err != nil {
 				tc.t.Errorf("%s: unexpected error: %v", taPrefix,
 					err)
@@ -1521,10 +1519,10 @@ func testManagerAPI(tc *testContext) {
 	testLocking(tc)
 	testExternalAddresses(tc)
 	testInternalAddresses(tc)
+	testImportPublicKey(tc)
 	testImportPrivateKey(tc)
 	testImportScript(tc)
 	testMarkUsed(tc)
-	testImportAddress(tc)
 	testChangePassphrase(tc)
 
 	// Reset default account

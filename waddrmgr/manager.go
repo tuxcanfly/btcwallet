@@ -566,21 +566,19 @@ func (m *Manager) chainAddressRowToManaged(row *dbChainAddressRow) (ManagedAddre
 	return m.keyToManaged(addressKey, row.account, row.branch, row.index, row.used)
 }
 
-// importedHash160AddressRowToManaged returns a new managed address based on imported
+// importedAddressRowToManaged returns a new managed address based on imported
 // address data loaded from the database.
-func (m *Manager) importedHash160AddressRowToManaged(row *dbImportedHash160AddressRow) (ManagedAddress, error) {
-	// Use the crypto public key to decrypt the imported pk hash.
-	pkHash, err := m.cryptoKeyPub.Decrypt(row.encryptedHash160)
-	if err != nil {
-		str := "failed to decrypt hash 160 for imported address"
-		return nil, managerError(ErrCrypto, str, err)
+func (m *Manager) importedAddressRowToManaged(row *dbImportedAddressRow) (ManagedAddress, error) {
+	// Check and handle watching-only imported addresses
+	if row.watchingOnly && len(row.encryptedPubKeyHash) > 0 {
+		hash160, err := m.cryptoKeyPub.Decrypt(row.encryptedPubKeyHash)
+		if err != nil {
+			str := "failed to decrypt hash 160 for imported address"
+			return nil, managerError(ErrCrypto, str, err)
+		}
+		return newManagedPublicAddress(m, row.account, hash160)
 	}
-	return newAddress(m, row.account, pkHash)
-}
 
-// importedPubKeyAddressRowToManaged returns a new managed address based on imported
-// address data loaded from the database.
-func (m *Manager) importedPubKeyAddressRowToManaged(row *dbImportedPubKeyAddressRow) (ManagedAddress, error) {
 	// Use the crypto public key to decrypt the imported public key.
 	pubBytes, err := m.cryptoKeyPub.Decrypt(row.encryptedPubKey)
 	if err != nil {
@@ -628,11 +626,8 @@ func (m *Manager) rowInterfaceToManaged(rowInterface interface{}) (ManagedAddres
 	case *dbChainAddressRow:
 		return m.chainAddressRowToManaged(row)
 
-	case *dbImportedPubKeyAddressRow:
-		return m.importedPubKeyAddressRowToManaged(row)
-
-	case *dbImportedHash160AddressRow:
-		return m.importedHash160AddressRowToManaged(row)
+	case *dbImportedAddressRow:
+		return m.importedAddressRowToManaged(row)
 
 	case *dbScriptAddressRow:
 		return m.scriptAddressRowToManaged(row)
@@ -978,81 +973,6 @@ func (m *Manager) existsAddress(addressID []byte) (bool, error) {
 	return exists, nil
 }
 
-// ImportAddress imports a watch-only address into the address manager.
-//
-// All imported addresses will be part of the account defined by the
-// ImportedAddrAccount constant.
-func (m *Manager) ImportAddress(addr btcutil.Address, bs *BlockStamp) (ManagedAddress, error) {
-	// Ensure the address is intended for network the address manager is
-	// associated with.
-	if !addr.IsForNet(m.ChainParams()) {
-		str := fmt.Sprintf("address is not for the same network the "+
-			"address manager is configured for (%s)", m.ChainParams().Name)
-		return nil, managerError(ErrWrongNet, str, nil)
-	}
-
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-
-	// Prevent duplicates.
-	addressID := addr.ScriptAddress()
-	alreadyExists, err := m.existsAddress(addressID)
-	if err != nil {
-		return nil, err
-	}
-	if alreadyExists {
-		str := fmt.Sprintf("address %s already exists",
-			addr)
-		return nil, managerError(ErrDuplicateAddress, str, nil)
-	}
-
-	// The start block needs to be updated when the newly imported address
-	// is before the current one.
-	updateStartBlock := bs.Height < m.syncState.startBlock.Height
-
-	// Encrypt public key hash.
-	encryptedHash160, err := m.cryptoKeyPub.Encrypt(addressID)
-	if err != nil {
-		str := fmt.Sprintf("failed to encrypt public key hash for %x",
-			addressID)
-		return nil, managerError(ErrCrypto, str, err)
-	}
-
-	// Save the new imported address to the db and update start block (if
-	// needed) in a single transaction.
-	err = m.namespace.Update(func(tx walletdb.Tx) error {
-		err := putImportedHash160Address(tx, addressID, ImportedAddrAccount,
-			ssNone, encryptedHash160)
-		if err != nil {
-			return err
-		}
-
-		if updateStartBlock {
-			return putStartBlock(tx, bs)
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Now that the database has been updated, update the start block in
-	// memory too if needed.
-	if updateStartBlock {
-		m.syncState.startBlock = *bs
-	}
-
-	// Create a new managed address based on the imported address.
-	importedAddr, err := newAddress(m, ImportedAddrAccount, addressID)
-	if err != nil {
-		return nil, err
-	}
-	importedAddr.imported = true
-
-	return importedAddr, nil
-}
-
 // ImportPublicKey imports a raw pubkey as a watch-only address into the address manager.
 //
 // All imported addresses will be part of the account defined by the
@@ -1088,8 +1008,8 @@ func (m *Manager) ImportPublicKey(pubKey *btcec.PublicKey, bs *BlockStamp) (Mana
 	// Save the new imported address to the db and update start block (if
 	// needed) in a single transaction.
 	err = m.namespace.Update(func(tx walletdb.Tx) error {
-		err := putImportedPubKeyAddress(tx, pubKeyHash, ImportedAddrAccount,
-			ssNone, m.watchingOnly, nil, encryptedPubKey, nil)
+		err := putImportedAddress(tx, pubKeyHash, ImportedAddrAccount,
+			ssNone, true, nil, encryptedPubKey, nil)
 		if err != nil {
 			return err
 		}
@@ -1122,6 +1042,75 @@ func (m *Manager) ImportPublicKey(pubKey *btcec.PublicKey, bs *BlockStamp) (Mana
 	// Add the new managed address to the cache of recent addresses and
 	// return it.
 	m.addrs[addrKey(managedAddr.Address().ScriptAddress())] = managedAddr
+	return managedAddr, nil
+}
+
+// ImportAddress imports a raw pkhash as a watch-only address into the address manager.
+//
+// All imported addresses will be part of the account defined by the
+// ImportedAddrAccount constant.
+func (m *Manager) ImportAddress(addr btcutil.Address, bs *BlockStamp) (ManagedAddress, error) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	pubKeyHash := addr.ScriptAddress()
+	alreadyExists, err := m.existsAddress(pubKeyHash)
+	if err != nil {
+		return nil, err
+	}
+	if alreadyExists {
+		str := fmt.Sprintf("address for pubkey hash %x already exists",
+			pubKeyHash)
+		return nil, managerError(ErrDuplicateAddress, str, nil)
+	}
+
+	// The start block needs to be updated when the newly imported address
+	// is before the current one.
+	updateStartBlock := bs.Height < m.syncState.startBlock.Height
+
+	// Encrypt public key hash.
+	encryptedPubKeyHash, err := m.cryptoKeyPub.Encrypt(pubKeyHash)
+	if err != nil {
+		str := fmt.Sprintf("failed to encrypt public key hash for %x",
+			pubKeyHash)
+		return nil, managerError(ErrCrypto, str, err)
+	}
+
+	// Save the new imported address to the db and update start block (if
+	// needed) in a single transaction.
+	err = m.namespace.Update(func(tx walletdb.Tx) error {
+		err := putImportedAddress(tx, pubKeyHash, ImportedAddrAccount,
+			ssNone, true, encryptedPubKeyHash, nil, nil)
+		if err != nil {
+			return err
+		}
+
+		if updateStartBlock {
+			return putStartBlock(tx, bs)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Now that the database has been updated, update the start block in
+	// memory too if needed.
+	if updateStartBlock {
+		m.syncState.startBlock = *bs
+	}
+
+	// Create a new managed address based on the imported address.
+	var managedAddr *managedAddress
+	managedAddr, err = newManagedPublicAddress(m, ImportedAddrAccount, pubKeyHash)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add the new managed address to the cache of recent addresses and
+	// return it.
+	m.addrs[addrKey(pubKeyHash)] = managedAddr
 	return managedAddr, nil
 }
 
@@ -1201,7 +1190,7 @@ func (m *Manager) ImportPrivateKey(wif *btcutil.WIF, bs *BlockStamp) (ManagedPub
 	// Save the new imported address to the db and update start block (if
 	// needed) in a single transaction.
 	err = m.namespace.Update(func(tx walletdb.Tx) error {
-		err := putImportedPubKeyAddress(tx, pubKeyHash, ImportedAddrAccount,
+		err := putImportedAddress(tx, pubKeyHash, ImportedAddrAccount,
 			ssNone, m.watchingOnly, nil, encryptedPubKey, encryptedPrivKey)
 		if err != nil {
 			return err
