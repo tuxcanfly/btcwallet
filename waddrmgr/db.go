@@ -1399,7 +1399,7 @@ func deletePrivateKeys(tx walletdb.Tx) error {
 			// Reserialize the imported address without the private
 			// key and store it.
 			row.rawData = serializeImportedAddress(
-				nil, irow.encryptedPubKey, nil)
+				irow.encryptedPubKeyHash, irow.encryptedPubKey, nil)
 			err = bucket.Put(k, serializeAddressRow(row))
 			if err != nil {
 				str := "failed to delete imported private key"
