@@ -263,7 +263,7 @@ func (a *managedAddress) ExportPrivKey() (*btcutil.WIF, error) {
 	return btcutil.NewWIF(pk, a.manager.chainParams, a.compressed)
 }
 
-// newManagedPublicAddress returns a new address based on the passed
+// newManagedPublicAddress returns a new address based on the passed account
 // and address ID.
 func newManagedPublicAddress(m *Manager, account uint32, addressID []byte) (*managedAddress, error) {
 	address, err := btcutil.NewAddressPubKeyHash(addressID, m.ChainParams())

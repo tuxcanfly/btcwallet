@@ -944,6 +944,9 @@ func deserializeImportedAddress(row *dbAddressRow) (*dbImportedAddressRow, error
 
 // serializeImportedAddress returns the serialization of the raw data field for
 // an imported address.
+// encryptedPubKeyHash is the encrypted hash160 of the public key associated
+// with an imported  address. It maybe nil if the private/public key of the
+// imported address is available.
 func serializeImportedAddress(encryptedPubKeyHash, encryptedPubKey, encryptedPrivKey []byte) []byte {
 	// The serialized imported address raw data format is:
 	//   <encpkhashlen><encpkhash><encpubkeylen><encpubkey>
@@ -1817,7 +1820,9 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPa
 // upgradeToVersion4 upgrades the database from version 3 to version 4
 // The following fields were added to the serialized address row:
 // * 'watchingOnly' - boolean indicating whether the address is watching-only
+// This is required to flag each imported address as watching-only
 // * 'encryptedPubKeyHash' - encrypted pubkey hash of imported p2pkh address
+// This is required to import addresses without the associated public key.
 func upgradeToVersion4(namespace walletdb.Namespace) error {
 	err := namespace.Update(func(tx walletdb.Tx) error {
 		currentMgrVersion := uint32(4)
