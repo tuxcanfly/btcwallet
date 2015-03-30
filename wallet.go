@@ -37,7 +37,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/base58"
 	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcwallet/chain"
 	"github.com/btcsuite/btcwallet/txstore"
@@ -1137,22 +1136,9 @@ func (w *Wallet) ImportAddress(addr btcutil.Address, bs *waddrmgr.BlockStamp,
 		}
 	}
 
-	// Check whether addr is P2SH or P2PKH and import accordingly
-	_, netID, err := base58.CheckDecode(addr.String())
+	_, err := w.Manager.ImportAddress(addr, bs)
 	if err != nil {
 		return "", err
-	}
-	switch {
-	case chaincfg.IsPubKeyHashAddrID(netID):
-		_, err := w.Manager.ImportAddress(addr, bs)
-		if err != nil {
-			return "", err
-		}
-	case chaincfg.IsScriptHashAddrID(netID):
-		_, err := w.Manager.ImportScript(addr.ScriptAddress(), bs)
-		if err != nil {
-			return "", err
-		}
 	}
 
 	// Rescan blockchain for transactions with txout scripts paying to the
@@ -1190,12 +1176,17 @@ func (w *Wallet) ImportPubKey(pubKey *btcec.PublicKey, bs *waddrmgr.BlockStamp, 
 		}
 	}
 
-	// Attempt to import address into wallet.
-	managedAddr, err := w.Manager.ImportPublicKey(pubKey, bs)
+	addr, err := btcutil.NewAddressPubKey(
+		pubKey.SerializeCompressed(), activeNet.Params)
 	if err != nil {
 		return "", err
 	}
-	addr := managedAddr.Address()
+
+	// Attempt to import address into wallet.
+	_, err = w.Manager.ImportAddress(addr, bs)
+	if err != nil {
+		return "", err
+	}
 
 	// Rescan blockchain for transactions with txout scripts paying to the
 	// imported address.

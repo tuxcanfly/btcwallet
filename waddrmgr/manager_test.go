@@ -24,7 +24,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
@@ -725,134 +724,6 @@ func testLocking(tc *testContext) bool {
 	return true
 }
 
-// testImportPublicKey tests that importing public key works properly.  It
-// ensures they can be retrieved by Address after they have been imported and
-// the addresses give the expected values when the manager is locked and
-// unlocked.
-//
-// This function expects the manager is already locked when called and returns
-// with the manager locked.
-func testImportPublicKey(tc *testContext) bool {
-	tests := []struct {
-		name       string
-		in         string
-		blockstamp waddrmgr.BlockStamp
-		expected   expectedAddr
-	}{
-		{
-			name: "public key address",
-			in:   "1JLv4miwKGsCeUuTSnBnji52ncZGEVNZjd",
-			expected: expectedAddr{
-				address:     "1JLv4miwKGsCeUuTSnBnji52ncZGEVNZjd",
-				addressHash: hexToBytes("be3e568a1fc5b22a61af3aadb53dff30c22ae97f"),
-				internal:    false,
-				imported:    true,
-				compressed:  true,
-				pubKey:      hexToBytes("03562d206cc133e83316ee8b8f0b328c854e4877b8df207aa4e0328cf8ee684595"),
-				privKey:     nil,
-			},
-		},
-	}
-
-	// The manager must be unlocked to import a address, however a
-	// watching-only manager can't be unlocked.
-	if !tc.watchingOnly {
-		if err := tc.manager.Unlock(privPassphrase); err != nil {
-			tc.t.Errorf("Unlock: unexpected error: %v", err)
-			return false
-		}
-		tc.unlocked = true
-	}
-
-	// Only import the addresses when in the create phase of testing.
-	net := tc.manager.ChainParams()
-	tc.account = waddrmgr.ImportedAddrAccount
-	prefix := testNamePrefix(tc) + " testImportPublicKey"
-	if tc.create {
-		for i, test := range tests {
-			pubKey, err := btcec.ParsePubKey(test.expected.pubKey, btcec.S256())
-			if err != nil {
-				tc.t.Errorf("%s: unexpected error: %v", prefix,
-					err)
-				return false
-			}
-			maddr, err := tc.manager.ImportPublicKey(pubKey,
-				&test.blockstamp)
-			if err != nil {
-				tc.t.Errorf("%s ImportPublicKey #%d (%s): "+
-					"unexpected error: %v", prefix, i,
-					test.name, err)
-				continue
-			}
-			if !testAddress(tc, prefix+" ImportPublicKey", maddr,
-				&test.expected) {
-				continue
-			}
-		}
-	}
-
-	// Setup a closure to test the results since the same tests need to be
-	// repeated with the manager unlocked and locked.
-	testResults := func() bool {
-		failed := false
-		for i, test := range tests {
-			addr, err := btcutil.NewAddressPubKeyHash(test.expected.addressHash, net)
-			if err != nil {
-				tc.t.Errorf("%s NewAddressPubKeyHash #%d (%s): "+
-					"unexpected error: %v", prefix, i,
-					test.name, err)
-				continue
-			}
-			taPrefix := fmt.Sprintf("%s Address #%d (%s)", prefix,
-				i, test.name)
-			ma, err := tc.manager.Address(addr)
-			if err != nil {
-				tc.t.Errorf("%s: unexpected error: %v", taPrefix,
-					err)
-				failed = true
-				continue
-			}
-			if !testAddress(tc, taPrefix, ma, &test.expected) {
-				failed = true
-				continue
-			}
-		}
-
-		return !failed
-	}
-
-	// The address manager could either be locked or unlocked here depending
-	// on whether or not it's a watching-only manager.  When it's unlocked,
-	// this will test both the public and private address data are accurate.
-	// When it's locked, it must be watching-only, so only the public
-	// address  information is tested and the private functions are checked
-	// to ensure they return the expected ErrWatchingOnly error.
-	if !testResults() {
-		return false
-	}
-
-	// Everything after this point involves locking the address manager and
-	// retesting the addresses with a locked manager.  However, for
-	// watching-only mode, this has already happened, so just exit now in
-	// that case.
-	if tc.watchingOnly {
-		return true
-	}
-
-	// Lock the manager and retest all of the addresses to ensure the
-	// private information returns the expected error.
-	if err := tc.manager.Lock(); err != nil {
-		tc.t.Errorf("Lock: unexpected error: %v", err)
-		return false
-	}
-	tc.unlocked = false
-	if !testResults() {
-		return false
-	}
-
-	return true
-}
-
 // testImportAddress tests that importing addresses works properly.  It
 // ensures they can be retrieved by Address after they have been imported and
 // the addresses give the expected values when the manager is locked and
@@ -874,6 +745,19 @@ func testImportAddress(tc *testContext) bool {
 				address:     "1HZwkjkeaoZfTSaJxDw6aKkxp45agDiEzN",
 				addressHash: hexToBytes("b5bd079c4d57cc7fc28ecf8213a6b791625b8183"),
 				imported:    true,
+			},
+		},
+		{
+			name: "public key address",
+			in:   "1JLv4miwKGsCeUuTSnBnji52ncZGEVNZjd",
+			expected: expectedAddr{
+				address:     "1JLv4miwKGsCeUuTSnBnji52ncZGEVNZjd",
+				addressHash: hexToBytes("be3e568a1fc5b22a61af3aadb53dff30c22ae97f"),
+				internal:    false,
+				imported:    true,
+				compressed:  true,
+				pubKey:      hexToBytes("03562d206cc133e83316ee8b8f0b328c854e4877b8df207aa4e0328cf8ee684595"),
+				privKey:     nil,
 			},
 		},
 	}
@@ -1646,7 +1530,6 @@ func testManagerAPI(tc *testContext) {
 	testLocking(tc)
 	testExternalAddresses(tc)
 	testInternalAddresses(tc)
-	testImportPublicKey(tc)
 	testImportPrivateKey(tc)
 	testImportAddress(tc)
 	testImportScript(tc)
