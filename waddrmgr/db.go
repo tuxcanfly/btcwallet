@@ -930,14 +930,18 @@ func deserializeImportedAddress(row *dbAddressRow) (*dbImportedAddressRow, error
 	pkHashLen := binary.LittleEndian.Uint32(row.rawData[0:4])
 	retRow.encryptedPubKeyHash = make([]byte, pkHashLen)
 	copy(retRow.encryptedPubKeyHash, row.rawData[4:4+pkHashLen])
+	offset := 4 + pkHashLen
 
-	pubLen := binary.LittleEndian.Uint32(row.rawData[4+pkHashLen : 8+pkHashLen])
+	pubLen := binary.LittleEndian.Uint32(row.rawData[offset : offset+4])
+	offset += 4
 	retRow.encryptedPubKey = make([]byte, pubLen)
-	copy(retRow.encryptedPubKey, row.rawData[8+pkHashLen:8+pkHashLen+pubLen])
+	copy(retRow.encryptedPubKey, row.rawData[offset:offset+pubLen])
+	offset += pubLen
 
-	privLen := binary.LittleEndian.Uint32(row.rawData[8+pkHashLen+pubLen : 12+pkHashLen+pubLen])
+	privLen := binary.LittleEndian.Uint32(row.rawData[offset : offset+4])
+	offset += 4
 	retRow.encryptedPrivKey = make([]byte, privLen)
-	copy(retRow.encryptedPrivKey, row.rawData[12+pkHashLen+pubLen:12+pkHashLen+pubLen+privLen])
+	copy(retRow.encryptedPrivKey, row.rawData[offset:offset+privLen])
 
 	return &retRow, nil
 }
@@ -962,12 +966,16 @@ func serializeImportedAddress(encryptedPubKeyHash, encryptedPubKey, encryptedPri
 
 	binary.LittleEndian.PutUint32(rawData[0:4], pkHashLen)
 	copy(rawData[4:4+pkHashLen], encryptedPubKeyHash)
+	offset := 4 + pkHashLen
 
-	binary.LittleEndian.PutUint32(rawData[4+pkHashLen:8+pkHashLen], pubLen)
-	copy(rawData[8+pkHashLen:8+pkHashLen+pubLen], encryptedPubKey)
+	binary.LittleEndian.PutUint32(rawData[offset:offset+4], pubLen)
+	offset += 4
+	copy(rawData[offset:offset+pubLen], encryptedPubKey)
+	offset += pubLen
 
-	binary.LittleEndian.PutUint32(rawData[8+pkHashLen+pubLen:12+pkHashLen+pubLen], privLen)
-	copy(rawData[12+pkHashLen+pubLen:12+pkHashLen+pubLen+privLen], encryptedPrivKey)
+	binary.LittleEndian.PutUint32(rawData[offset:offset+4], privLen)
+	offset += 4
+	copy(rawData[offset:offset+privLen], encryptedPrivKey)
 
 	return rawData
 }
@@ -1402,7 +1410,9 @@ func deletePrivateKeys(tx walletdb.Tx) error {
 			// Reserialize the imported address without the private
 			// key and store it.
 			row.rawData = serializeImportedAddress(
-				irow.encryptedPubKeyHash, irow.encryptedPubKey, nil)
+				irow.encryptedPubKeyHash,
+				irow.encryptedPubKey,
+				nil)
 			err = bucket.Put(k, serializeAddressRow(row))
 			if err != nil {
 				str := "failed to delete imported private key"
@@ -1684,7 +1694,6 @@ func createManagerNS(namespace walletdb.Namespace) error {
 // initialized and it will be updated on the next rescan.
 func upgradeToVersion2(namespace walletdb.Namespace) error {
 	err := namespace.Update(func(tx walletdb.Tx) error {
-		currentMgrVersion := uint32(2)
 		rootBucket := tx.RootBucket()
 
 		_, err := rootBucket.CreateBucket(usedAddrBucketName)
@@ -1693,7 +1702,7 @@ func upgradeToVersion2(namespace walletdb.Namespace) error {
 			return managerError(ErrDatabase, str, err)
 		}
 
-		if err := putManagerVersion(tx, currentMgrVersion); err != nil {
+		if err := putManagerVersion(tx, 2); err != nil {
 			return err
 		}
 
@@ -1712,7 +1721,6 @@ func upgradeToVersion2(namespace walletdb.Namespace) error {
 // * metaBucketName
 func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPassPhrase []byte) error {
 	err := namespace.Update(func(tx walletdb.Tx) error {
-		currentMgrVersion := uint32(3)
 		rootBucket := tx.RootBucket()
 
 		woMgr, err := loadManager(namespace, pubPassPhrase, &chaincfg.SimNetParams, nil)
@@ -1804,7 +1812,7 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPa
 		}
 
 		// Write current manager version
-		if err := putManagerVersion(tx, currentMgrVersion); err != nil {
+		if err := putManagerVersion(tx, 3); err != nil {
 			return err
 		}
 
@@ -1825,7 +1833,6 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPa
 // This is required to import addresses without the associated public key.
 func upgradeToVersion4(namespace walletdb.Namespace) error {
 	err := namespace.Update(func(tx walletdb.Tx) error {
-		currentMgrVersion := uint32(4)
 		bucket := tx.RootBucket().Bucket(addrBucketName)
 
 		err := bucket.ForEach(func(k, v []byte) error {
@@ -1834,29 +1841,29 @@ func upgradeToVersion4(namespace walletdb.Namespace) error {
 				return nil
 			}
 
-			// Insert watchingOnly bool at byte 14
-			// Since importing watching-only addrs was added in this version we
-			// can safely initialize this to falseByte
-			x := make([]byte, len(v)+1)
-			copy(x[:13], v[:13])
-			x[14] = falseByte
-			copy(x[15:], v[14:])
+			// Since importing watching-only addrs was not added
+			// until this version, mark all existing addresses as
+			// not being watching-only.
+			serializedAddress := make([]byte, len(v)+1)
+			copy(serializedAddress[:13], v[:13])
+			serializedAddress[14] = falseByte
+			copy(serializedAddress[15:], v[14:])
 
-			addrType := addressType(x[0])
+			addrType := addressType(serializedAddress[0])
 
 			// Update imported private key addresses for encryptedPubKeyHash field
 			switch addrType {
 			case adtImport:
 				// Insert nil for encrypted pkhash in rawData
-				rdlen := binary.LittleEndian.Uint32(x[15:19])
-				binary.LittleEndian.PutUint32(x[15:19], uint32(rdlen+4))
+				rdlen := binary.LittleEndian.Uint32(serializedAddress[15:19])
+				binary.LittleEndian.PutUint32(serializedAddress[15:19], uint32(rdlen+4))
 				rawData := make([]byte, rdlen+4)
-				copy(rawData, x[19:])
-				binary.LittleEndian.PutUint32(x[19:23], 0)
-				copy(x[23:], rawData)
+				copy(rawData, serializedAddress[19:])
+				binary.LittleEndian.PutUint32(serializedAddress[19:23], 0)
+				copy(serializedAddress[23:], rawData)
 			}
 
-			err := bucket.Put(k, x)
+			err := bucket.Put(k, serializedAddress)
 			if err != nil {
 				str := "failed to update address"
 				return managerError(ErrDatabase, str, err)
@@ -1867,7 +1874,7 @@ func upgradeToVersion4(namespace walletdb.Namespace) error {
 			return err
 		}
 
-		if err := putManagerVersion(tx, currentMgrVersion); err != nil {
+		if err := putManagerVersion(tx, 4); err != nil {
 			return err
 		}
 

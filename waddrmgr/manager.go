@@ -1053,6 +1053,11 @@ func (m *Manager) ImportAddress(addr btcutil.Address, bs *BlockStamp) (ManagedAd
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
+	if !addr.IsForNet(m.chainParams) {
+		str := "address to be imported does not belong to the configured network"
+		return nil, managerError(ErrWrongNet, str, nil)
+	}
+
 	pubKeyHash := addr.ScriptAddress()
 	alreadyExists, err := m.existsAddress(pubKeyHash)
 	if err != nil {

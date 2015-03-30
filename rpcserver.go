@@ -1847,6 +1847,10 @@ func ImportAddress(w *Wallet, chainSvr *chain.Client, icmd btcjson.Cmd) (interfa
 		}
 	}
 
+	if !addr.IsForNet(activeNet.Params) {
+		return nil, btcjson.ErrInvalidAddressOrKey
+	}
+
 	_, err = w.ImportAddress(addr, nil, cmd.Rescan)
 	return nil, err
 }
