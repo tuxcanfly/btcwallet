@@ -30,7 +30,7 @@ import (
 
 const (
 	// LatestMgrVersion is the most recent manager version.
-	LatestMgrVersion = 3
+	LatestMgrVersion = 4
 )
 
 var (
@@ -1633,12 +1633,11 @@ func upgradeToVersion2(namespace walletdb.Namespace) error {
 // * acctNameIdxBucketName
 // * acctIDIdxBucketName
 // * metaBucketName
-// In addition, cointype keys are re-generated and stored in the database.
-func upgradeToVersion3(namespace walletdb.Namespace, seed, pubPassPhrase, privPassPhrase []byte) error {
+func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPassPhrase []byte, chainParams *chaincfg.Params) error {
 	err := namespace.Update(func(tx walletdb.Tx) error {
 		rootBucket := tx.RootBucket()
 
-		woMgr, err := loadManager(namespace, pubPassPhrase, &chaincfg.SimNetParams, nil)
+		woMgr, err := loadManager(namespace, pubPassPhrase, chainParams, nil)
 		if err != nil {
 			return err
 		}
@@ -1657,7 +1656,7 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, pubPassPhrase, privPa
 		}
 
 		// Derive the cointype key according to BIP0044.
-		coinTypeKeyPriv, err := deriveCoinTypeKey(root, chaincfg.SimNetParams.HDCoinType)
+		coinTypeKeyPriv, err := deriveCoinTypeKey(root, chainParams.HDCoinType)
 		if err != nil {
 			str := "failed to derive cointype extended key"
 			return managerError(ErrKeyChain, str, err)
@@ -1711,11 +1710,14 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, pubPassPhrase, privPa
 			return err
 		}
 
+		// Use the default account name prior to version 4.
+		const defaultAccountName = "default"
+
 		// Update default account indexes
-		if err := putAccountIDIndex(tx, DefaultAccountNum, DefaultAccountName); err != nil {
+		if err := putAccountIDIndex(tx, DefaultAccountNum, defaultAccountName); err != nil {
 			return err
 		}
-		if err := putAccountNameIndex(tx, DefaultAccountNum, DefaultAccountName); err != nil {
+		if err := putAccountNameIndex(tx, DefaultAccountNum, defaultAccountName); err != nil {
 			return err
 		}
 		// Update imported account indexes
@@ -1742,7 +1744,7 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, pubPassPhrase, privPa
 
 // upgradeManager upgrades the data in the provided manager namespace to newer
 // versions as neeeded.
-var upgradeManager = func(namespace walletdb.Namespace, seed, pubPassPhrase, privPassPhrase []byte, config *Options) error {
+var upgradeManager = func(namespace walletdb.Namespace, seed, pubPassPhrase, privPassPhrase []byte, chainParams *chaincfg.Params, config *Options) error {
 	var version uint32
 	err := namespace.View(func(tx walletdb.Tx) error {
 		var err error
@@ -1823,12 +1825,21 @@ var upgradeManager = func(namespace walletdb.Namespace, seed, pubPassPhrase, pri
 
 		// Upgrade from version 2 to 3.
 		if err := upgradeToVersion3(namespace, seed, pubPassPhrase,
-			privPassPhrase); err != nil {
+			privPassPhrase, chainParams); err != nil {
 			return err
 		}
 
 		// The manager is now at version 3.
 		version = 3
+	}
+
+	if version < 4 {
+		if err := upgradeToVersion4(namespace, pubPassPhrase); err != nil {
+			return err
+		}
+
+		// The manager is now at version 4.
+		version = 4
 	}
 
 	// Ensure the manager is upraded to the latest version.  This check is
@@ -1839,6 +1850,100 @@ var upgradeManager = func(namespace walletdb.Namespace, seed, pubPassPhrase, pri
 			"current version after upgrades is only %d",
 			latestMgrVersion, version)
 		return managerError(ErrUpgrade, str, nil)
+	}
+	return nil
+}
+
+// upgradeToVersion4 upgrades the database from version 3 to version 4.
+// The default account is now only named by the empty string and the old
+// "default" name is no longer used.
+func upgradeToVersion4(namespace walletdb.Namespace, pubPassPhrase []byte) error {
+	err := namespace.Update(func(tx walletdb.Tx) error {
+		// Write new manager version.
+		err := putManagerVersion(tx, 4)
+		if err != nil {
+			return err
+		}
+
+		acctInfoIface, err := fetchAccountInfo(tx, DefaultAccountNum)
+		if err != nil {
+			return err
+		}
+		acctInfo, ok := acctInfoIface.(*dbBIP0044AccountRow)
+		if !ok {
+			str := fmt.Sprintf("unsupported account type %T", acctInfoIface)
+			return managerError(ErrDatabase, str, nil)
+		}
+
+		// Rewrite the default account with the new account name.
+		// Avoid using the global default account name constant here in
+		// case it is ever changed again in a later upgrade.
+		err = putAccountInfo(tx, DefaultAccountNum,
+			acctInfo.pubKeyEncrypted, acctInfo.privKeyEncrypted,
+			acctInfo.nextExternalIndex, acctInfo.nextInternalIndex,
+			"")
+		if err != nil {
+			return err
+		}
+
+		// Delete the previous default account name from the account
+		// name index.
+		err = deleteAccountNameIndex(tx, "default")
+		if err != nil {
+			return err
+		}
+
+		// Ensure that the empty string maps forwards and backwards to
+		// the default account index, and that the account row contains
+		// the new name.
+		name, err := fetchAccountName(tx, DefaultAccountNum)
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			const str = "account name index does not map default account number to new name"
+			return managerError(ErrUpgrade, str, nil)
+		}
+		acct, err := fetchAccountByName(tx, "")
+		if err != nil {
+			return err
+		}
+		if acct != DefaultAccountNum {
+			const str = "default account not accessible under new name"
+			return managerError(ErrUpgrade, str, nil)
+		}
+		acctInfoIface, err = fetchAccountInfo(tx, DefaultAccountNum)
+		if err != nil {
+			return err
+		}
+		acctInfo, ok = acctInfoIface.(*dbBIP0044AccountRow)
+		if !ok {
+			str := fmt.Sprintf("unsupported account type %T", acctInfoIface)
+			return managerError(ErrDatabase, str, nil)
+		}
+		if acctInfo.name != "" {
+			const str = "default account row does not contain new account name"
+			return managerError(ErrUpgrade, str, nil)
+		}
+
+		// Ensure that looking up the default account by the "default"
+		// name cannot succeed.  "default" was previously a reserved
+		// name, so there should be no other accounts by this name.
+		_, err = fetchAccountByName(tx, "default")
+		if err == nil {
+			const str = "default account exists under old name"
+			return managerError(ErrUpgrade, str, nil)
+		} else {
+			merr, ok := err.(ManagerError)
+			if !ok || merr.ErrorCode != ErrAccountNotFound {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return maybeConvertDbError(err)
 	}
 	return nil
 }
