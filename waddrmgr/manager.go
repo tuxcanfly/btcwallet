@@ -2461,7 +2461,8 @@ func Create(namespace walletdb.Namespace, seed, pubPassphrase, privPassphrase []
 	}
 
 	// Upgrade the manager to the latest version as needed.
-	if err := upgradeManager(namespace, seed, pubPassphrase, privPassphrase, chainParams, config); err != nil {
+	if err := upgradeManager(namespace, seed, pubPassphrase, privPassphrase,
+		chainParams, config); err != nil {
 		return nil, err
 	}
 

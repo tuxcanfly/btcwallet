@@ -105,8 +105,8 @@ func testUpgradeToVersion2(t *testing.T, namespace walletdb.Namespace) {
 
 // testUpgradeToVersion3 tests that applying version 3 upgrade works as expected
 func testUpgradeToVersion3(t *testing.T, namespace walletdb.Namespace) {
-	if err := upgradeToVersion3(namespace, seed, pubPassphrase, privPassphrase); err != nil {
-		t.Errorf("Upgrade Manager (version 2): upgrade failed - %v", err)
+	if err := upgradeToVersion3(namespace, seed, pubPassphrase, privPassphrase, &chaincfg.MainNetParams); err != nil {
+		t.Errorf("Upgrade Manager (version 3): upgrade failed - %v", err)
 		return
 	}
 
@@ -148,10 +148,11 @@ func testUpgradeToVersion3(t *testing.T, namespace walletdb.Namespace) {
 		if err != nil {
 			return err
 		}
-		if gotDefaultAccountName != DefaultAccountName {
+		wantDefaultAccountName := "default"
+		if gotDefaultAccountName != wantDefaultAccountName {
 			t.Errorf("Upgrade Manager "+
-				"default account name mismatch"+
-				"got %v, want %v", gotDefaultAccountName, DefaultAccountName)
+				"default account name mismatch "+
+				"got %v, want %v", gotDefaultAccountName, wantDefaultAccountName)
 		}
 
 		gotImportedAccountName, err := fetchAccountName(tx, ImportedAddrAccount)
@@ -160,7 +161,7 @@ func testUpgradeToVersion3(t *testing.T, namespace walletdb.Namespace) {
 		}
 		if gotImportedAccountName != ImportedAddrAccountName {
 			t.Errorf("Upgrade Manager "+
-				"imported account name mismatch"+
+				"imported account name mismatch "+
 				"got %v, want %v", gotImportedAccountName, ImportedAddrAccountName)
 		}
 
@@ -170,7 +171,7 @@ func testUpgradeToVersion3(t *testing.T, namespace walletdb.Namespace) {
 		}
 		if gotLastAccount != DefaultAccountNum {
 			t.Errorf("Upgrade Manager "+
-				"last account mismatch"+
+				"last account mismatch "+
 				"got %d, want %d", gotLastAccount, DefaultAccountNum)
 		}
 
@@ -180,13 +181,75 @@ func testUpgradeToVersion3(t *testing.T, namespace walletdb.Namespace) {
 		}
 		if gotAccount != DefaultAccountNum {
 			t.Errorf("Upgrade Manager "+
-				"default account alias mismatch"+
+				"default account alias mismatch "+
 				"got %d, want %d", gotAccount, DefaultAccountNum)
 		}
 		return nil
 	})
 	if err != nil {
-		t.Errorf("Upgrade Manager (version 3): upgrade failed - %v", err)
+		t.Errorf("Upgrade Manager (version 3): unexpected error - %v", err)
+	}
+}
+
+// testUpgradeToVersion4 tests that applying version 4 upgrade works as expected
+func testUpgradeToVersion4(t *testing.T, namespace walletdb.Namespace) {
+	if err := upgradeToVersion4(namespace, pubPassphrase); err != nil {
+		t.Errorf("Upgrade Manager (version 4): upgrade failed - %v", err)
+		return
+	}
+
+	err := namespace.View(func(tx walletdb.Tx) error {
+		// Ensure that the empty string maps forwards and backwards to
+		// the default account index, and that the account row contains
+		// the new name.
+		name, err := fetchAccountName(tx, DefaultAccountNum)
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			const str = "account name index does not map default account number to new name"
+			return managerError(ErrUpgrade, str, nil)
+		}
+		acct, err := fetchAccountByName(tx, "")
+		if err != nil {
+			return err
+		}
+		if acct != DefaultAccountNum {
+			const str = "default account not accessible under new name"
+			return managerError(ErrUpgrade, str, nil)
+		}
+		acctInfoIface, err := fetchAccountInfo(tx, DefaultAccountNum)
+		if err != nil {
+			return err
+		}
+		acctInfo, ok := acctInfoIface.(*dbBIP0044AccountRow)
+		if !ok {
+			str := fmt.Sprintf("unsupported account type %T", acctInfoIface)
+			return managerError(ErrDatabase, str, nil)
+		}
+		if acctInfo.name != "" {
+			const str = "default account row does not contain new account name"
+			return managerError(ErrUpgrade, str, nil)
+		}
+
+		// Ensure that looking up the default account by the "default"
+		// name cannot succeed.  "default" was previously a reserved
+		// name, so there should be no other accounts by this name.
+		_, err = fetchAccountByName(tx, "default")
+		if err == nil {
+			const str = "default account exists under old name"
+			return managerError(ErrUpgrade, str, nil)
+		} else {
+			merr, ok := err.(ManagerError)
+			if !ok || merr.ErrorCode != ErrAccountNotFound {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Errorf("Upgrade Manager (version 4): unexpected error - %v", err)
 	}
 }
 
@@ -205,7 +268,7 @@ func TestUpgrade(t *testing.T) {
 	// Disable automatic upgrades so we can test each one individually
 	autoUpgradeManager := upgradeManager
 	upgradeManager = func(namespace walletdb.Namespace, seed, pubPassPhrase,
-		privPassPhrase []byte, config *Options) error {
+		privPassPhrase []byte, chainParams *chaincfg.Params, config *Options) error {
 		return nil
 	}
 
@@ -223,6 +286,7 @@ func TestUpgrade(t *testing.T) {
 	// Apply and test each upgrade
 	testUpgradeToVersion2(t, namespace)
 	testUpgradeToVersion3(t, namespace)
+	testUpgradeToVersion4(t, namespace)
 
 	// After all upgrades, test that manager is the latest version
 	testVersion(t, namespace, latestMgrVersion)

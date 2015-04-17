@@ -1633,7 +1633,7 @@ func upgradeToVersion2(namespace walletdb.Namespace) error {
 // * acctNameIdxBucketName
 // * acctIDIdxBucketName
 // * metaBucketName
-func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPassPhrase []byte, chainParams *chaincfg.Params) error {
+func upgradeToVersion3(namespace walletdb.Namespace, seed, pubPassPhrase, privPassPhrase []byte, chainParams *chaincfg.Params) error {
 	err := namespace.Update(func(tx walletdb.Tx) error {
 		rootBucket := tx.RootBucket()
 
@@ -1735,6 +1735,75 @@ func upgradeToVersion3(namespace walletdb.Namespace, seed, privPassPhrase, pubPa
 
 		// Save "" alias for default account name for backward compat
 		return putAccountNameIndex(tx, DefaultAccountNum, "")
+	})
+	if err != nil {
+		return maybeConvertDbError(err)
+	}
+	return nil
+}
+
+// upgradeToVersion4 upgrades the database from version 3 to version 4.
+// The default account is now only named by the empty string and the old
+// "default" name is no longer used.
+func upgradeToVersion4(namespace walletdb.Namespace, pubPassPhrase []byte) error {
+	err := namespace.Update(func(tx walletdb.Tx) error {
+		// Write new manager version.
+		err := putManagerVersion(tx, 4)
+		if err != nil {
+			return err
+		}
+
+		acctInfoIface, err := fetchAccountInfo(tx, DefaultAccountNum)
+		if err != nil {
+			return err
+		}
+		acctInfo, ok := acctInfoIface.(*dbBIP0044AccountRow)
+		if !ok {
+			str := fmt.Sprintf("unsupported account type %T", acctInfoIface)
+			return managerError(ErrDatabase, str, nil)
+		}
+
+		// Rewrite the default account with the new account name.
+		// Avoid using the global default account name constant here in
+		// case it is ever changed again in a later upgrade.
+		err = putAccountInfo(tx, DefaultAccountNum,
+			acctInfo.pubKeyEncrypted, acctInfo.privKeyEncrypted,
+			acctInfo.nextExternalIndex, acctInfo.nextInternalIndex,
+			"")
+		if err != nil {
+			return err
+		}
+
+		// Delete the previous default account name from the account
+		// name index.
+		err = deleteAccountNameIndex(tx, "default")
+		if err != nil {
+			return err
+		}
+
+		// Delete any non-empty string entries which map to the default
+		// acccount from the account name index.
+		bucket := tx.RootBucket().Bucket(acctNameIdxBucketName)
+		err = bucket.ForEach(func(k, v []byte) error {
+			// Skip buckets.
+			if v == nil {
+				return nil
+			}
+			account := binary.LittleEndian.Uint32(v)
+			if account == DefaultAccountNum {
+				nameLen := binary.LittleEndian.Uint32(k[0:4])
+				if nameLen != 0 {
+					return bucket.Delete(k)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			const str = "error deleting default account alias"
+			return managerError(ErrUpgrade, str, err)
+		}
+
+		return nil
 	})
 	if err != nil {
 		return maybeConvertDbError(err)
@@ -1850,122 +1919,6 @@ var upgradeManager = func(namespace walletdb.Namespace, seed, pubPassPhrase, pri
 			"current version after upgrades is only %d",
 			latestMgrVersion, version)
 		return managerError(ErrUpgrade, str, nil)
-	}
-	return nil
-}
-
-// upgradeToVersion4 upgrades the database from version 3 to version 4.
-// The default account is now only named by the empty string and the old
-// "default" name is no longer used.
-func upgradeToVersion4(namespace walletdb.Namespace, pubPassPhrase []byte) error {
-	err := namespace.Update(func(tx walletdb.Tx) error {
-		// Write new manager version.
-		err := putManagerVersion(tx, 4)
-		if err != nil {
-			return err
-		}
-
-		acctInfoIface, err := fetchAccountInfo(tx, DefaultAccountNum)
-		if err != nil {
-			return err
-		}
-		acctInfo, ok := acctInfoIface.(*dbBIP0044AccountRow)
-		if !ok {
-			str := fmt.Sprintf("unsupported account type %T", acctInfoIface)
-			return managerError(ErrDatabase, str, nil)
-		}
-
-		// Rewrite the default account with the new account name.
-		// Avoid using the global default account name constant here in
-		// case it is ever changed again in a later upgrade.
-		err = putAccountInfo(tx, DefaultAccountNum,
-			acctInfo.pubKeyEncrypted, acctInfo.privKeyEncrypted,
-			acctInfo.nextExternalIndex, acctInfo.nextInternalIndex,
-			"")
-		if err != nil {
-			return err
-		}
-
-		// Delete the previous default account name from the account
-		// name index.
-		err = deleteAccountNameIndex(tx, "default")
-		if err != nil {
-			return err
-		}
-
-		// Delete any non-empty string entries which map to the default
-		// acccount from the account name index.
-		bucket := tx.RootBucket().Bucket(acctNameIdxBucketName)
-		err = bucket.ForEach(func(k, v []byte) error {
-			// Skip buckets.
-			if v == nil {
-				return nil
-			}
-			account := binary.LittleEndian.Uint32(v)
-			if account == DefaultAccountNum {
-				nameLen := binary.LittleEndian.Uint32(k[0:4])
-				if nameLen != 0 {
-					return bucket.Delete(k)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			const str = "error deleting default account alias"
-			return managerError(ErrUpgrade, str, err)
-		}
-
-		// Ensure that the empty string maps forwards and backwards to
-		// the default account index, and that the account row contains
-		// the new name.
-		name, err := fetchAccountName(tx, DefaultAccountNum)
-		if err != nil {
-			return err
-		}
-		if name != "" {
-			const str = "account name index does not map default account number to new name"
-			return managerError(ErrUpgrade, str, nil)
-		}
-		acct, err := fetchAccountByName(tx, "")
-		if err != nil {
-			return err
-		}
-		if acct != DefaultAccountNum {
-			const str = "default account not accessible under new name"
-			return managerError(ErrUpgrade, str, nil)
-		}
-		acctInfoIface, err = fetchAccountInfo(tx, DefaultAccountNum)
-		if err != nil {
-			return err
-		}
-		acctInfo, ok = acctInfoIface.(*dbBIP0044AccountRow)
-		if !ok {
-			str := fmt.Sprintf("unsupported account type %T", acctInfoIface)
-			return managerError(ErrDatabase, str, nil)
-		}
-		if acctInfo.name != "" {
-			const str = "default account row does not contain new account name"
-			return managerError(ErrUpgrade, str, nil)
-		}
-
-		// Ensure that looking up the default account by the "default"
-		// name cannot succeed.  "default" was previously a reserved
-		// name, so there should be no other accounts by this name.
-		_, err = fetchAccountByName(tx, "default")
-		if err == nil {
-			const str = "default account exists under old name"
-			return managerError(ErrUpgrade, str, nil)
-		} else {
-			merr, ok := err.(ManagerError)
-			if !ok || merr.ErrorCode != ErrAccountNotFound {
-				return err
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return maybeConvertDbError(err)
 	}
 	return nil
 }
