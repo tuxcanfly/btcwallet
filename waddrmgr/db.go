@@ -1893,6 +1893,28 @@ func upgradeToVersion4(namespace walletdb.Namespace, pubPassPhrase []byte) error
 			return err
 		}
 
+		// Delete any non-empty string entries which map to the default
+		// acccount from the account name index.
+		bucket := tx.RootBucket().Bucket(acctNameIdxBucketName)
+		err = bucket.ForEach(func(k, v []byte) error {
+			// Skip buckets.
+			if v == nil {
+				return nil
+			}
+			account := binary.LittleEndian.Uint32(v)
+			if account == DefaultAccountNum {
+				nameLen := binary.LittleEndian.Uint32(k[0:4])
+				if nameLen != 0 {
+					return bucket.Delete(k)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			const str = "error deleting default account alias"
+			return managerError(ErrUpgrade, str, err)
+		}
+
 		// Ensure that the empty string maps forwards and backwards to
 		// the default account index, and that the account row contains
 		// the new name.
