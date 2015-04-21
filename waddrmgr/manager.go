@@ -92,9 +92,8 @@ var (
 	// reservedAccountNames is a set of account names reserved for internal
 	// purposes
 	reservedAccountNames = map[string]struct{}{
-		"*":                     struct{}{},
-		DefaultAccountName:      struct{}{},
-		ImportedAddrAccountName: struct{}{},
+		"*": struct{}{},
+		"":  struct{}{},
 	}
 )
 
@@ -1630,10 +1629,6 @@ func (m *Manager) LastInternalAddress(account uint32) (ManagedAddress, error) {
 
 // ValidateAccountName validates the given account name and returns an error, if any.
 func ValidateAccountName(name string) error {
-	if name == "" {
-		str := "invalid account name, cannot be blank"
-		return managerError(ErrInvalidAccount, str, nil)
-	}
 	if _, ok := reservedAccountNames[name]; ok {
 		str := "reserved account name"
 		return managerError(ErrInvalidAccount, str, nil)
@@ -1748,15 +1743,16 @@ func (m *Manager) RenameAccount(account uint32, name string) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
+	// Validate account name
+	if err := ValidateAccountName(name); err != nil {
+		return err
+	}
+
 	// Check that account with the new name does not exist
 	_, err := m.lookupAccount(name)
 	if err == nil {
 		str := fmt.Sprintf("account with the same name already exists")
 		return managerError(ErrDuplicateAccount, str, err)
-	}
-	// Validate account name
-	if err := ValidateAccountName(name); err != nil {
-		return err
 	}
 
 	var rowInterface interface{}
