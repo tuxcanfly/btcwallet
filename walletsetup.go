@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
@@ -94,6 +95,8 @@ func promptPrivPassPhrase() ([]byte, error) {
 	prompt := "Enter the private passphrase of your wallet: "
 	for {
 		fmt.Print(prompt)
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
 		pass, err := terminal.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
 			return nil, err
@@ -163,6 +166,8 @@ func promptConsolePass(reader *bufio.Reader, prefix string, confirm bool) ([]byt
 	prompt := fmt.Sprintf("%s: ", prefix)
 	for {
 		fmt.Print(prompt)
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
 		pass, err := terminal.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
 			return nil, err
