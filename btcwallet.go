@@ -12,7 +12,9 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 
+	"github.com/btcsuite/btcd/connmgr"
 	"github.com/btcsuite/btcwallet/chain"
 	"github.com/btcsuite/btcwallet/rpc/legacyrpc"
 	"github.com/btcsuite/btcwallet/wallet"
@@ -91,6 +93,27 @@ func walletMain() error {
 			log.Error(err)
 			return err
 		}
+	}
+
+	// Start connecting to peers on SPV mode.
+	if cfg.SPV {
+		// Create a connection manager.
+		connmgrCfg := &connmgr.Config{
+			RetryDuration: time.Second * 5,
+			MaxOutbound:   8,
+			Dial:          net.Dial,
+			OnConnection: func(c *connmgr.ConnReq, conn net.Conn) {
+				log.Debugf("Connected to %v", c.Addr)
+			},
+		}
+		cmgr, err := connmgr.New(connmgrCfg)
+		if err != nil {
+			return err
+		}
+		for _, addr := range cfg.ConnectPeers {
+			go cmgr.Connect(&connmgr.ConnReq{Addr: addr, Permanent: true})
+		}
+		cmgr.Start()
 	}
 
 	// Add interrupt handlers to shutdown the various process components
