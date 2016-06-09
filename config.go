@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -14,11 +15,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/btcsuite/btcd/connmgr"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcwallet/internal/cfgutil"
 	"github.com/btcsuite/btcwallet/internal/legacy/keystore"
 	"github.com/btcsuite/btcwallet/netparams"
 	"github.com/btcsuite/btcwallet/wallet"
+	"github.com/btcsuite/go-socks/socks"
 	flags "github.com/jessevdk/go-flags"
 )
 
@@ -59,6 +62,7 @@ type config struct {
 
 	// Wallet options
 	WalletPass   string   `long:"walletpass" default-mask:"-" description:"The public wallet password -- Only required if the wallet was created with one"`
+	AddPeers     []string `short:"a" long:"addpeer" description:"Add a peer to connect with at startup"`
 	ConnectPeers []string `long:"connect" description:"Connect only to the specified peers at startup"`
 	SPV          bool     `long:"spv" description:"Enable Simplified Payment Verification mode"`
 
@@ -71,6 +75,12 @@ type config struct {
 	Proxy            string                  `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
 	ProxyUser        string                  `long:"proxyuser" description:"Username for proxy server"`
 	ProxyPass        string                  `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
+	DisableDNSSeed   bool                    `long:"nodnsseed" description:"Disable DNS seeding for peers"`
+	OnionProxy       string                  `long:"onion" description:"Connect to tor hidden services via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
+	OnionProxyUser   string                  `long:"onionuser" description:"Username for onion proxy server"`
+	OnionProxyPass   string                  `long:"onionpass" default-mask:"-" description:"Password for onion proxy server"`
+	NoOnion          bool                    `long:"noonion" description:"Disable connecting to tor hidden services"`
+	TorIsolation     bool                    `long:"torisolation" description:"Enable Tor stream isolation by randomizing user credentials for each connection."`
 
 	// RPC server options
 	//
@@ -98,6 +108,11 @@ type config struct {
 
 	// Deprecated options
 	DataDir *cfgutil.ExplicitString `short:"b" long:"datadir" default-mask:"-" description:"DEPRECATED -- use appdata instead"`
+
+	onionlookup func(string) ([]net.IP, error)
+	lookup      func(string) ([]net.IP, error)
+	oniondial   func(string, string) (net.Conn, error)
+	dial        func(string, string) (net.Conn, error)
 }
 
 // cleanAndExpandPath expands environement variables and leading ~ in the
@@ -488,6 +503,21 @@ func loadConfig() (*config, []string, error) {
 		return nil, nil, err
 	}
 
+	// --addPeer and --connect do not mix.
+	if len(cfg.AddPeers) > 0 && len(cfg.ConnectPeers) > 0 {
+		str := "%s: the --addpeer and --connect options can not be " +
+			"mixed"
+		err := fmt.Errorf(str, funcName)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+
+	// Connect means no DNS seeding.
+	if len(cfg.ConnectPeers) > 0 {
+		cfg.DisableDNSSeed = true
+	}
+
 	if cfg.RPCConnect == "" {
 		cfg.RPCConnect = net.JoinHostPort("localhost", activeNet.RPCClientPort)
 	}
@@ -627,6 +657,123 @@ func loadConfig() (*config, []string, error) {
 		}
 	}
 
+	// Add default port to all added peer addresses if needed and remove
+	// duplicate addresses.
+	cfg.AddPeers, err = cfgutil.NormalizeAddresses(cfg.AddPeers,
+		activeNet.DefaultPort)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"Invalid network address in --addpeer: %v\n", err)
+		return nil, nil, err
+	}
+	cfg.ConnectPeers, err = cfgutil.NormalizeAddresses(cfg.ConnectPeers,
+		activeNet.DefaultPort)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"Invalid network address in --connect: %v\n", err)
+		return nil, nil, err
+	}
+
+	// Tor stream isolation requires either proxy or onion proxy to be set.
+	if cfg.TorIsolation && cfg.Proxy == "" && cfg.OnionProxy == "" {
+		str := "%s: Tor stream isolation requires either proxy or " +
+			"onionproxy to be set"
+		err := fmt.Errorf(str, funcName)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+
+	// Setup dial and DNS resolution (lookup) functions depending on the
+	// specified options.  The default is to use the standard net.Dial
+	// function as well as the system DNS resolver.  When a proxy is
+	// specified, the dial function is set to the proxy specific dial
+	// function and the lookup is set to use tor (unless --noonion is
+	// specified in which case the system DNS resolver is used).
+	cfg.dial = net.Dial
+	cfg.lookup = net.LookupIP
+	if cfg.Proxy != "" {
+		_, _, err := net.SplitHostPort(cfg.Proxy)
+		if err != nil {
+			str := "%s: Proxy address '%s' is invalid: %v"
+			err := fmt.Errorf(str, funcName, cfg.Proxy, err)
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, usageMessage)
+			return nil, nil, err
+		}
+
+		if cfg.TorIsolation &&
+			(cfg.ProxyUser != "" || cfg.ProxyPass != "") {
+			log.Warn("Tor isolation set -- overriding " +
+				"specified proxy user credentials")
+		}
+
+		proxy := &socks.Proxy{
+			Addr:         cfg.Proxy,
+			Username:     cfg.ProxyUser,
+			Password:     cfg.ProxyPass,
+			TorIsolation: cfg.TorIsolation,
+		}
+		cfg.dial = proxy.Dial
+		if !cfg.NoOnion {
+			cfg.lookup = func(host string) ([]net.IP, error) {
+				return connmgr.TorLookupIP(host, cfg.Proxy)
+			}
+		}
+	}
+
+	// Setup onion address dial and DNS resolution (lookup) functions
+	// depending on the specified options.  The default is to use the
+	// same dial and lookup functions selected above.  However, when an
+	// onion-specific proxy is specified, the onion address dial and
+	// lookup functions are set to use the onion-specific proxy while
+	// leaving the normal dial and lookup functions as selected above.
+	// This allows .onion address traffic to be routed through a different
+	// proxy than normal traffic.
+	if cfg.OnionProxy != "" {
+		_, _, err := net.SplitHostPort(cfg.OnionProxy)
+		if err != nil {
+			str := "%s: Onion proxy address '%s' is invalid: %v"
+			err := fmt.Errorf(str, funcName, cfg.OnionProxy, err)
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, usageMessage)
+			return nil, nil, err
+		}
+
+		if cfg.TorIsolation &&
+			(cfg.OnionProxyUser != "" || cfg.OnionProxyPass != "") {
+			log.Warn("Tor isolation set -- overriding " +
+				"specified onionproxy user credentials ")
+		}
+
+		cfg.oniondial = func(a, b string) (net.Conn, error) {
+			proxy := &socks.Proxy{
+				Addr:         cfg.OnionProxy,
+				Username:     cfg.OnionProxyUser,
+				Password:     cfg.OnionProxyPass,
+				TorIsolation: cfg.TorIsolation,
+			}
+			return proxy.Dial(a, b)
+		}
+		cfg.onionlookup = func(host string) ([]net.IP, error) {
+			return connmgr.TorLookupIP(host, cfg.OnionProxy)
+		}
+	} else {
+		cfg.oniondial = cfg.dial
+		cfg.onionlookup = cfg.lookup
+	}
+
+	// Specifying --noonion means the onion address dial and DNS resolution
+	// (lookup) functions result in an error.
+	if cfg.NoOnion {
+		cfg.oniondial = func(a, b string) (net.Conn, error) {
+			return nil, errors.New("tor has been disabled")
+		}
+		cfg.onionlookup = func(a string) ([]net.IP, error) {
+			return nil, errors.New("tor has been disabled")
+		}
+	}
+
 	// Expand environment variable and leading ~ for filepaths.
 	cfg.CAFile.Value = cleanAndExpandPath(cfg.CAFile.Value)
 	cfg.RPCCert.Value = cleanAndExpandPath(cfg.RPCCert.Value)
@@ -644,4 +791,30 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	return &cfg, remainingArgs, nil
+}
+
+// btcwalletDial connects to the address on the named network using the appropriate
+// dial function depending on the address and configuration options.  For
+// example, .onion addresses will be dialed using the onion specific proxy if
+// one was specified, but will otherwise use the normal dial function (which
+// could itself use a proxy or not).
+func btcwalletDial(network, address string) (net.Conn, error) {
+	if strings.Contains(address, ".onion:") {
+		return cfg.oniondial(network, address)
+	}
+	return cfg.dial(network, address)
+}
+
+// btcwalletLookup returns the correct DNS lookup function to use depending on the
+// passed host and configuration options.  For example, .onion addresses will be
+// resolved using the onion specific proxy if one was specified, but will
+// otherwise treat the normal proxy as tor unless --noonion was specified in
+// which case the lookup will fail.  Meanwhile, normal IP addresses will be
+// resolved using tor if a proxy was specified unless --noonion was also
+// specified in which case the normal system DNS resolver will be used.
+func btcwalletLookup(host string) ([]net.IP, error) {
+	if strings.HasSuffix(host, ".onion") {
+		return cfg.onionlookup(host)
+	}
+	return cfg.lookup(host)
 }
