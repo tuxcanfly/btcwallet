@@ -18,6 +18,7 @@ import (
 	"github.com/btcsuite/btcwallet/chain"
 	"github.com/btcsuite/btcwallet/rpc/legacyrpc"
 	"github.com/btcsuite/btcwallet/wallet"
+	"github.com/decred/dcrd/addrmgr"
 )
 
 var (
@@ -97,6 +98,7 @@ func walletMain() error {
 
 	// Start connecting to peers on SPV mode.
 	if cfg.SPV {
+		amgr := addrmgr.New(dbDir, btcwalletLookup)
 		// Create a connection manager.
 		connmgrCfg := &connmgr.Config{
 			RetryDuration: time.Second * 5,
@@ -105,6 +107,15 @@ func walletMain() error {
 			OnConnection: func(c *connmgr.ConnReq, conn net.Conn) {
 				log.Debugf("Connected to %v", c.Addr)
 			},
+		}
+		if len(cfg.ConnectPeers) == 0 {
+			connmgrCfg.GetNewAddress = func() string {
+				addr := amgr.GetAddress("any")
+				if addr == nil {
+					return ""
+				}
+				return addrmgr.NetAddressKey(addr.NetAddress())
+			}
 		}
 		cmgr, err := connmgr.New(connmgrCfg)
 		if err != nil {
