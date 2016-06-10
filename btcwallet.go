@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/addrmgr"
 	"github.com/btcsuite/btcd/connmgr"
 	"github.com/btcsuite/btcwallet/chain"
 	"github.com/btcsuite/btcwallet/rpc/legacyrpc"
 	"github.com/btcsuite/btcwallet/wallet"
-	"github.com/decred/dcrd/addrmgr"
 )
 
 var (
@@ -99,6 +99,7 @@ func walletMain() error {
 	// Start connecting to peers on SPV mode.
 	if cfg.SPV {
 		amgr := addrmgr.New(dbDir, btcwalletLookup)
+		seedFromDNS(amgr)
 		// Create a connection manager.
 		connmgrCfg := &connmgr.Config{
 			RetryDuration: time.Second * 5,
