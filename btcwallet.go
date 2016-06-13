@@ -16,6 +16,7 @@ import (
 
 	"github.com/btcsuite/btcd/addrmgr"
 	"github.com/btcsuite/btcd/connmgr"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcwallet/chain"
 	"github.com/btcsuite/btcwallet/rpc/legacyrpc"
 	"github.com/btcsuite/btcwallet/wallet"
@@ -99,7 +100,17 @@ func walletMain() error {
 	// Start connecting to peers on SPV mode.
 	if cfg.SPV {
 		amgr := addrmgr.New(dbDir, btcwalletLookup)
-		seedFromDNS(amgr)
+		if !cfg.DisableDNSSeed {
+			// Add peers discovered through DNS to the address manager.
+			connmgr.SeedFromDNS(activeNet.Params, btcwalletLookup, func(addrs []*wire.NetAddress) {
+				// Bitcoind uses a lookup of the dns seeder here. This
+				// is rather strange since the values looked up by the
+				// DNS seed lookups will vary quite a lot.
+				// to replicate this behaviour we put all addresses as
+				// having come from the first one.
+				amgr.AddAddresses(addrs, addrs[0])
+			})
+		}
 		// Create a connection manager.
 		connmgrCfg := &connmgr.Config{
 			RetryDuration: time.Second * 5,

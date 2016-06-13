@@ -7,20 +7,15 @@ package main
 import (
 	"errors"
 	"fmt"
-	mrand "math/rand"
 	"net"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/btcsuite/btcd/addrmgr"
 	"github.com/btcsuite/btcd/connmgr"
-	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcwallet/internal/cfgutil"
 	"github.com/btcsuite/btcwallet/internal/legacy/keystore"
@@ -40,11 +35,6 @@ const (
 	defaultRPCMaxWebsockets = 25
 
 	walletDbName = "wallet.db"
-
-	// These constants are used by the DNS seed code to pick a random last
-	// seen time.
-	secondsIn3Days int32 = 24 * 60 * 60 * 3
-	secondsIn4Days int32 = 24 * 60 * 60 * 4
 )
 
 var (
@@ -827,50 +817,4 @@ func btcwalletLookup(host string) ([]net.IP, error) {
 		return cfg.onionlookup(host)
 	}
 	return cfg.lookup(host)
-}
-
-func seedFromDNS(amgr *addrmgr.AddrManager) {
-	// Nothing to do if DNS seeding is disabled.
-	if cfg.DisableDNSSeed {
-		return
-	}
-
-	for _, seeder := range activeNet.DNSSeeds {
-		go func(seeder string) {
-			randSource := mrand.New(mrand.NewSource(time.Now().UnixNano()))
-
-			seedpeers, err := btcwalletLookup(seeder)
-			if err != nil {
-				log.Infof("DNS discovery failed on seed %s: %v", seeder, err)
-				return
-			}
-			numPeers := len(seedpeers)
-
-			log.Infof("%d addresses found from DNS seed %s", numPeers, seeder)
-
-			if numPeers == 0 {
-				return
-			}
-			addresses := make([]*wire.NetAddress, len(seedpeers))
-			// if this errors then we have *real* problems
-			intPort, _ := strconv.Atoi(activeNet.DefaultPort)
-			for i, peer := range seedpeers {
-				addresses[i] = new(wire.NetAddress)
-				addresses[i].SetAddress(peer, uint16(intPort))
-				// bitcoind seeds with addresses from
-				// a time randomly selected between 3
-				// and 7 days ago.
-				addresses[i].Timestamp = time.Now().Add(-1 *
-					time.Second * time.Duration(secondsIn3Days+
-					randSource.Int31n(secondsIn4Days)))
-			}
-
-			// Bitcoind uses a lookup of the dns seeder here. This
-			// is rather strange since the values looked up by the
-			// DNS seed lookups will vary quite a lot.
-			// to replicate this behaviour we put all addresses as
-			// having come from the first one.
-			amgr.AddAddresses(addresses, addresses[0])
-		}(seeder)
-	}
 }
