@@ -38,6 +38,7 @@ const (
 	defaultLogFilename      = "btcwallet.log"
 	defaultRPCMaxClients    = 10
 	defaultRPCMaxWebsockets = 25
+	defaultBanDuration      = time.Hour * 24
 
 	walletDbName = "wallet.db"
 
@@ -71,10 +72,13 @@ type config struct {
 	Profile       string                  `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
 
 	// Wallet options
-	WalletPass   string   `long:"walletpass" default-mask:"-" description:"The public wallet password -- Only required if the wallet was created with one"`
-	AddPeers     []string `short:"a" long:"addpeer" description:"Add a peer to connect with at startup"`
-	ConnectPeers []string `long:"connect" description:"Connect only to the specified peers at startup"`
-	SPV          bool     `long:"spv" description:"Enable Simplified Payment Verification mode"`
+	WalletPass string `long:"walletpass" default-mask:"-" description:"The public wallet password -- Only required if the wallet was created with one"`
+
+	// SPV options
+	AddPeers     []string      `short:"a" long:"addpeer" description:"Add a peer to connect with at startup"`
+	ConnectPeers []string      `long:"connect" description:"Connect only to the specified peers at startup"`
+	SPV          bool          `long:"spv" description:"Enable Simplified Payment Verification mode"`
+	BanDuration  time.Duration `long:"banduration" description:"How long to ban misbehaving peers.  Valid time units are {s, m, h}.  Minimum 1 second"`
 
 	// RPC client options
 	RPCConnect       string                  `short:"c" long:"rpcconnect" description:"Hostname/IP and port of btcd RPC server to connect to (default localhost:8334, testnet: localhost:18334, simnet: localhost:18556)"`
@@ -276,6 +280,7 @@ func loadConfig() (*config, []string, error) {
 		DebugLevel:             defaultLogLevel,
 		ConfigFile:             cfgutil.NewExplicitString(defaultConfigFile),
 		AppDataDir:             cfgutil.NewExplicitString(defaultAppDataDir),
+		BanDuration:            defaultBanDuration,
 		LogDir:                 defaultLogDir,
 		WalletPass:             wallet.InsecurePubPassphrase,
 		CAFile:                 cfgutil.NewExplicitString(""),
@@ -510,6 +515,15 @@ func loadConfig() (*config, []string, error) {
 				"--create option to import it.")
 		}
 		fmt.Fprintln(os.Stderr, err)
+		return nil, nil, err
+	}
+
+	// Don't allow ban durations that are too short.
+	if cfg.BanDuration < time.Duration(time.Second) {
+		str := "%s: The banduration option may not be less than 1s -- parsed [%v]"
+		err := fmt.Errorf(str, funcName, cfg.BanDuration)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
 		return nil, nil, err
 	}
 

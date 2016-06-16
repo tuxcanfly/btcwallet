@@ -12,10 +12,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
-	"time"
 
-	"github.com/btcsuite/btcd/addrmgr"
-	"github.com/btcsuite/btcd/connmgr"
 	"github.com/btcsuite/btcwallet/chain"
 	"github.com/btcsuite/btcwallet/rpc/legacyrpc"
 	"github.com/btcsuite/btcwallet/wallet"
@@ -98,34 +95,18 @@ func walletMain() error {
 
 	// Start connecting to peers on SPV mode.
 	if cfg.SPV {
-		amgr := addrmgr.New(dbDir, btcwalletLookup)
-		seedFromDNS(amgr)
-		// Create a connection manager.
-		connmgrCfg := &connmgr.Config{
-			RetryDuration: time.Second * 5,
-			MaxOutbound:   8,
-			Dial:          net.Dial,
-			OnConnection: func(c *connmgr.ConnReq, conn net.Conn) {
-				log.Debugf("Connected to %v", c.Addr)
-			},
-		}
-		if len(cfg.ConnectPeers) == 0 {
-			connmgrCfg.GetNewAddress = func() string {
-				addr := amgr.GetAddress("any")
-				if addr == nil {
-					return ""
-				}
-				return addrmgr.NetAddressKey(addr.NetAddress())
-			}
-		}
-		cmgr, err := connmgr.New(connmgrCfg)
+		// Create server and start it.
+		server, err := newServer(activeNet.Params)
 		if err != nil {
+			log.Error(err)
 			return err
 		}
-		for _, addr := range cfg.ConnectPeers {
-			go cmgr.Connect(&connmgr.ConnReq{Addr: addr, Permanent: true})
-		}
-		cmgr.Start()
+		addInterruptHandler(func() {
+			log.Infof("Gracefully shutting down spv server...")
+			server.Stop()
+			server.WaitForShutdown()
+		})
+		server.Start()
 	}
 
 	// Add interrupt handlers to shutdown the various process components
