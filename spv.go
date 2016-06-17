@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,10 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil/bloom"
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 const (
 	// defaultServices describes the default services that are supported by
@@ -48,38 +53,48 @@ var (
 type serverPeer struct {
 	*peer.Peer
 
-	connReq         *connmgr.ConnReq
-	server          *server
-	persistent      bool
-	continueHash    *wire.ShaHash
-	relayMtx        sync.Mutex
-	disableRelayTx  bool
-	requestQueue    []*wire.InvVect
-	requestedTxns   map[wire.ShaHash]struct{}
-	requestedBlocks map[wire.ShaHash]struct{}
-	filter          *bloom.Filter
-	knownAddresses  map[string]struct{}
-	banScore        connmgr.DynamicBanScore
-	quit            chan struct{}
-	// The following chans are used to sync blockmanager and server.
-	txProcessed    chan struct{}
-	blockProcessed chan struct{}
+	connReq    *connmgr.ConnReq
+	server     *server
+	persistent bool
+	filter     *bloom.Filter
+	quit       chan struct{}
 }
 
 // newServerPeer returns a new serverPeer instance. The peer needs to be set by
 // the caller.
 func newServerPeer(s *server, isPersistent bool) *serverPeer {
-	return &serverPeer{
-		server:          s,
-		persistent:      isPersistent,
-		requestedTxns:   make(map[wire.ShaHash]struct{}),
-		requestedBlocks: make(map[wire.ShaHash]struct{}),
-		filter:          bloom.LoadFilter(nil),
-		knownAddresses:  make(map[string]struct{}),
-		quit:            make(chan struct{}),
-		txProcessed:     make(chan struct{}, 1),
-		blockProcessed:  make(chan struct{}, 1),
+	tweak := rand.Uint32()
+	filter := bloom.NewFilter(10, tweak, 0.0001, wire.BloomUpdateAll)
+	for _, outpoint := range s.outpoints {
+		filter.AddOutPoint(outpoint)
 	}
+	return &serverPeer{
+		server:     s,
+		persistent: isPersistent,
+		filter:     bloom.LoadFilter(filter.MsgFilterLoad()),
+		quit:       make(chan struct{}),
+	}
+}
+
+// server provides a bitcoin server for handling communications to and from
+// bitcoin peers.
+type server struct {
+	started  int32
+	shutdown int32
+
+	chainParams *chaincfg.Params
+	connManager *connmgr.ConnManager
+	addrManager *addrmgr.AddrManager
+	newPeers    chan *serverPeer
+	donePeers   chan *serverPeer
+	banPeers    chan *serverPeer
+	wakeup      chan struct{}
+	query       chan interface{}
+	wg          sync.WaitGroup
+	quit        chan struct{}
+	timeSource  blockchain.MedianTimeSource
+	services    wire.ServiceFlag
+	outpoints   []*wire.OutPoint
 }
 
 // newOutboundPeer initializes a new outbound peer and setups the message
@@ -102,33 +117,6 @@ func (s *server) peerDoneHandler(sp *serverPeer) {
 	sp.WaitForDisconnect()
 	s.donePeers <- sp
 	close(sp.quit)
-}
-
-// server provides a bitcoin server for handling communications to and from
-// bitcoin peers.
-type server struct {
-	// The following variables must only be used atomically.
-	// Putting the uint64s first makes them 64-bit aligned for 32-bit systems.
-	bytesReceived uint64 // Total bytes received from all peers since start.
-	bytesSent     uint64 // Total bytes sent by all peers since start.
-	started       int32
-	shutdown      int32
-	shutdownSched int32
-
-	chainParams  *chaincfg.Params
-	connManager  *connmgr.ConnManager
-	addrManager  *addrmgr.AddrManager
-	pendingPeers chan *serverPeer
-	newPeers     chan *serverPeer
-	donePeers    chan *serverPeer
-	banPeers     chan *serverPeer
-	retryPeers   chan *serverPeer
-	wakeup       chan struct{}
-	query        chan interface{}
-	wg           sync.WaitGroup
-	quit         chan struct{}
-	timeSource   blockchain.MedianTimeSource
-	services     wire.ServiceFlag
 }
 
 // peerState maintains state of inbound, persistent, outbound peers as well
@@ -380,6 +368,10 @@ func (s *server) AddPeer(sp *serverPeer) {
 // BanPeer bans a peer that has already been connected to the server by ip.
 func (s *server) BanPeer(sp *serverPeer) {
 	s.banPeers <- sp
+}
+
+func (s *server) AddOutPoint(outpoint *wire.OutPoint) {
+	s.outpoints = append(s.outpoints, outpoint)
 }
 
 // Start begins accepting connections from peers.

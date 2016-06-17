@@ -101,6 +101,17 @@ func walletMain() error {
 			log.Error(err)
 			return err
 		}
+		// Add unspent outputs to the server for bloom filtering
+		loader.RunAfterLoad(func(w *wallet.Wallet) {
+			unspent, err := w.TxStore.UnspentOutputs()
+			if err != nil {
+				log.Error(err)
+				return
+			}
+			for _, c := range unspent {
+				server.AddOutPoint(&c.OutPoint)
+			}
+		})
 		addInterruptHandler(func() {
 			log.Infof("Gracefully shutting down spv server...")
 			server.Stop()
