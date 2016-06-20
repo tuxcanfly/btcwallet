@@ -63,15 +63,10 @@ type serverPeer struct {
 // newServerPeer returns a new serverPeer instance. The peer needs to be set by
 // the caller.
 func newServerPeer(s *server, isPersistent bool) *serverPeer {
-	tweak := rand.Uint32()
-	filter := bloom.NewFilter(10, tweak, 0.0001, wire.BloomUpdateAll)
-	for _, outpoint := range s.outpoints {
-		filter.AddOutPoint(outpoint)
-	}
 	return &serverPeer{
 		server:     s,
 		persistent: isPersistent,
-		filter:     bloom.LoadFilter(filter.MsgFilterLoad()),
+		filter:     nil,
 		quit:       make(chan struct{}),
 	}
 }
@@ -446,6 +441,13 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) {
 			}
 		}
 	}
+
+	// Request bloom filter
+	filter := bloom.NewFilter(10, 0, 0.0001, wire.BloomUpdateAll)
+	for _, outpoint := range sp.server.outpoints {
+		filter.AddOutPoint(outpoint)
+	}
+	p.QueueMessage(filter.MsgFilterLoad(), nil)
 
 	// Add valid peer to the server.
 	sp.server.AddPeer(sp)
