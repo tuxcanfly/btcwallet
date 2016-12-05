@@ -623,6 +623,11 @@ func loadConfig() (*config, []string, error) {
 		}
 	}
 
+	// Always prompt passphrase if stake mining is enabled
+	if cfg.EnableStakeMining {
+		cfg.PromptPass = true
+	}
+
 	if len(cfg.PoolAddress) != 0 {
 		_, err := dcrutil.DecodeAddress(cfg.PoolAddress, activeNet.Params)
 		if err != nil {
