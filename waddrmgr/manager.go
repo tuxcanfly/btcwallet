@@ -193,6 +193,9 @@ type unlockDeriveInfo struct {
 	index       uint32
 }
 
+type secretKey func(passphrase *[]byte,
+	config *ScryptOptions) (*snacl.SecretKey, error)
+
 // defaultNewSecretKey returns a new secret key.  See newSecretKey.
 func defaultNewSecretKey(passphrase *[]byte,
 	config *ScryptOptions) (*snacl.SecretKey, error) {
@@ -321,6 +324,8 @@ type Manager struct {
 	// manager is already unlocked.  The hash is zeroed each lock.
 	privPassphraseSalt   [saltSize]byte
 	hashedPrivPassphrase [sha512.Size]byte
+
+	newSecretKey secretKey
 }
 
 // lock performs a best try effort to remove and zero all secret keys associated
@@ -890,7 +895,7 @@ func (m *Manager) ChangePassphrase(ns walletdb.ReadWriteBucket, oldPassphrase, n
 
 	// Generate a new master key from the passphrase which is used to secure
 	// the actual secret keys.
-	newMasterKey, err := newSecretKey(&newPassphrase, config)
+	newMasterKey, err := m.newSecretKey(&newPassphrase, config)
 	if err != nil {
 		str := "failed to create new master private key"
 		return managerError(ErrCrypto, str, err)
@@ -2464,7 +2469,7 @@ func (m *Manager) Decrypt(keyType CryptoKeyType, in []byte) ([]byte, error) {
 func newManager(chainParams *chaincfg.Params, masterKeyPub *snacl.SecretKey,
 	masterKeyPriv *snacl.SecretKey, cryptoKeyPub EncryptorDecryptor,
 	cryptoKeyPrivEncrypted, cryptoKeyScriptEncrypted []byte,
-	privPassphraseSalt [saltSize]byte) *Manager {
+	newSecretKey secretKey, privPassphraseSalt [saltSize]byte) *Manager {
 
 	return &Manager{
 		chainParams:              chainParams,
@@ -2479,6 +2484,7 @@ func newManager(chainParams *chaincfg.Params, masterKeyPub *snacl.SecretKey,
 		cryptoKeyScriptEncrypted: cryptoKeyScriptEncrypted,
 		cryptoKeyScript:          &cryptoKey{},
 		privPassphraseSalt:       privPassphraseSalt,
+		newSecretKey:             newSecretKey,
 	}
 }
 
@@ -2627,7 +2633,7 @@ func loadManager(ns walletdb.ReadBucket, pubPassphrase []byte,
 	// call to new with the values loaded from the database.
 	mgr := newManager(chainParams, &masterKeyPub, &masterKeyPriv,
 		cryptoKeyPub, cryptoKeyPrivEnc, cryptoKeyScriptEnc,
-		privPassphraseSalt)
+		newSecretKey, privPassphraseSalt)
 	mgr.watchingOnly = watchingOnly
 	return mgr, nil
 }
@@ -2680,7 +2686,7 @@ func DoUpgrades(db walletdb.DB, namespaceKey []byte, pubPassphrase []byte,
 // A ManagerError with an error code of ErrAlreadyExists will be returned the
 // address manager already exists in the specified namespace.
 func Create(ns walletdb.ReadWriteBucket, seed, pubPassphrase, privPassphrase []byte,
-	chainParams *chaincfg.Params, config *ScryptOptions, unsafeMainNet bool) error {
+	chainParams *chaincfg.Params, config *ScryptOptions, newSecretKey secretKey, unsafeMainNet bool) error {
 
 	err := func() error {
 		// Return an error if the manager has already been created in the given
@@ -2958,7 +2964,7 @@ func Create(ns walletdb.ReadWriteBucket, seed, pubPassphrase, privPassphrase []b
 // address manager already exists in the specified namespace.
 func CreateWatchOnly(ns walletdb.ReadWriteBucket, hdPubKey string,
 	pubPassphrase []byte, chainParams *chaincfg.Params,
-	config *ScryptOptions) (err error) {
+	newSecretKey secretKey, config *ScryptOptions) (err error) {
 
 	defer func() {
 		if err != nil {

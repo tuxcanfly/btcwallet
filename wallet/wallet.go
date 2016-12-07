@@ -31,6 +31,7 @@ import (
 	"github.com/decred/dcrutil"
 	"github.com/decred/dcrutil/hdkeychain"
 	"github.com/decred/dcrwallet/chain"
+	"github.com/decred/dcrwallet/snacl"
 	"github.com/decred/dcrwallet/waddrmgr"
 	"github.com/decred/dcrwallet/wallet/txauthor"
 	"github.com/decred/dcrwallet/wallet/txrules"
@@ -85,6 +86,17 @@ type VotingInfo struct {
 	BlockHeight int64
 	Tickets     []*chainhash.Hash
 }
+
+// defaultNewSecretKey returns a new secret key.  See newSecretKey.
+func defaultNewSecretKey(passphrase *[]byte,
+	config *waddrmgr.ScryptOptions) (*snacl.SecretKey, error) {
+	return snacl.NewSecretKey(passphrase, config.N, config.R, config.P)
+}
+
+// newSecretKey is used as a way to replace the new secret key generation
+// function used so tests can provide a version that fails for testing error
+// paths.
+var newSecretKey = defaultNewSecretKey
 
 // Wallet is a structure containing all the components for a
 // complete wallet.  It contains the Armory-style key store
@@ -3599,7 +3611,7 @@ func Create(db walletdb.DB, pubPass, privPass, seed []byte, params *chaincfg.Par
 		}
 
 		err = waddrmgr.Create(addrmgrNs, seed, pubPass, privPass,
-			params, nil, unsafeMainNet)
+			params, nil, newSecretKey, unsafeMainNet)
 		if err != nil {
 			return err
 		}
@@ -3624,7 +3636,7 @@ func CreateWatchOnly(db walletdb.DB, extendedPubKey string, pubPass []byte, para
 		}
 
 		err = waddrmgr.CreateWatchOnly(addrmgrNs, extendedPubKey,
-			pubPass, params, nil)
+			pubPass, params, newSecretKey, nil)
 		if err != nil {
 			return err
 		}
