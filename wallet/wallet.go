@@ -2795,6 +2795,21 @@ func hashInPointerSlice(h chainhash.Hash, list []*chainhash.Hash) bool {
 	return false
 }
 
+// SyncPurchased writes the purchased information to the wallet db.
+func (w *Wallet) SyncPurchased(height uint64, purchased int) error {
+	err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+		stakemgrNs := tx.ReadWriteBucket(wstakemgrNamespaceKey)
+		_, err := w.StakeMgr.InsertPurchased(
+			stakemgrNs,
+			height,
+			purchased,
+		)
+		return err
+	})
+	return err
+
+}
+
 // StakeInfo collects and returns staking statistics for this wallet to the end
 // user. This includes:
 //

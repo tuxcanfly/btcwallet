@@ -504,6 +504,40 @@ func (s *StakeStore) getSStx(ns walletdb.ReadBucket, hash *chainhash.Hash) (*sst
 	return fetchSStxRecord(ns, hash)
 }
 
+func (s *StakeStore) insertPurchased(ns walletdb.ReadWriteBucket,
+	blockHeight int64, n int32) error {
+
+	if blockHeight <= 0 {
+		return fmt.Errorf("invalid Purchased block height")
+	}
+
+	return putMeta(blockHeight, n)
+}
+
+func (s *StakeStore) InsertPurchased(ns walletdb.ReadWriteBucket,
+	blockHeight int64, n int32) error {
+	if s.isClosed {
+		str := "stake store is closed"
+		return stakeStoreError(ErrStoreClosed, str, nil)
+	}
+
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
+	return s.insertPurchased(ns, blockHeight, n)
+}
+
+func (s *StakeStore) fetchPurchased(ns walletdb.ReadBucket, blockHeight int64) (int32, error) {
+	return fetchMeta(blockHeight)
+}
+
+func (s *StakeStore) PurchaseInfo(ns walletdb.ReadBucket, blockHeight int64) (int32, error) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
+	return s.fetchPurchased(blockHeight)
+}
+
 // insertSSGen inserts an SSGen record into the DB (keyed to the SStx it
 // spends.
 func (s *StakeStore) insertSSGen(ns walletdb.ReadWriteBucket, blockHash *chainhash.Hash, blockHeight int64,

@@ -38,6 +38,7 @@ func (p *PurchaseManager) purchase(height int64) {
 		return
 	}
 	log.Debugf("Purchased %v tickets this round", purchaseInfo.Purchased)
+	p.w.SyncPurchased(height, purchaseInfo.Purchased)
 }
 
 // NotificationHandler handles notifications, which trigger ticket purchases.

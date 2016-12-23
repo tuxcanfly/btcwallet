@@ -1272,6 +1272,18 @@ func updateStakePoolInvalUserTickets(ns walletdb.ReadWriteBucket, scriptHash [20
 	return nil
 }
 
+func putPurchase(ns walletdb.ReadWriteBucket, height int64, n int32) {
+	var buf [8]byte
+	byteOrder.PutUint64(buf[:], height)
+	putMeta(ns, buf[:], n)
+}
+
+func fetchPurchase(ns walletdb.ReadBucket, height int64) int32 {
+	var buf [8]byte
+	byteOrder.PutUint64(buf[:], height)
+	return fetchMeta(ns, buf[:])
+}
+
 // putMeta puts a k-v into the meta bucket.
 func putMeta(ns walletdb.ReadWriteBucket, key []byte, n int32) error {
 	bucket := ns.NestedReadWriteBucket(metaBucketName)
