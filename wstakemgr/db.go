@@ -1272,15 +1272,15 @@ func updateStakePoolInvalUserTickets(ns walletdb.ReadWriteBucket, scriptHash [20
 	return nil
 }
 
-func putPurchase(ns walletdb.ReadWriteBucket, height int64, n int32) {
+func putPurchase(ns walletdb.ReadWriteBucket, height int64, n int32) error {
 	var buf [8]byte
-	byteOrder.PutUint64(buf[:], height)
-	putMeta(ns, buf[:], n)
+	byteOrder.PutUint64(buf[:], uint64(height))
+	return putMeta(ns, buf[:], n)
 }
 
-func fetchPurchase(ns walletdb.ReadBucket, height int64) int32 {
+func fetchPurchase(ns walletdb.ReadBucket, height int64) (int32, error) {
 	var buf [8]byte
-	byteOrder.PutUint64(buf[:], height)
+	byteOrder.PutUint64(buf[:], uint64(height))
 	return fetchMeta(ns, buf[:])
 }
 

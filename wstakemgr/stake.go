@@ -511,7 +511,7 @@ func (s *StakeStore) insertPurchased(ns walletdb.ReadWriteBucket,
 		return fmt.Errorf("invalid Purchased block height")
 	}
 
-	return putMeta(blockHeight, n)
+	return putPurchase(ns, blockHeight, n)
 }
 
 func (s *StakeStore) InsertPurchased(ns walletdb.ReadWriteBucket,
@@ -528,14 +528,14 @@ func (s *StakeStore) InsertPurchased(ns walletdb.ReadWriteBucket,
 }
 
 func (s *StakeStore) fetchPurchased(ns walletdb.ReadBucket, blockHeight int64) (int32, error) {
-	return fetchMeta(blockHeight)
+	return fetchPurchase(ns, blockHeight)
 }
 
 func (s *StakeStore) PurchaseInfo(ns walletdb.ReadBucket, blockHeight int64) (int32, error) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	return s.fetchPurchased(blockHeight)
+	return s.fetchPurchased(ns, blockHeight)
 }
 
 // insertSSGen inserts an SSGen record into the DB (keyed to the SStx it

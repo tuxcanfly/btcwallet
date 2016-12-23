@@ -196,6 +196,21 @@ func startTicketPurchase(w *wallet.Wallet, dcrdClient *dcrrpcclient.Client,
 
 	tkbyLog.Infof("Starting ticket buyer")
 
+	_, blockHeight, err := dcrdClient.GetBestBlock()
+	if err != nil {
+		tkbyLog.Errorf("Error fetching best block: %v", err)
+	} else {
+		purchased, err := w.PurchaseInfo(blockHeight)
+		if err != nil {
+			tkbyLog.Errorf("Error fetching purchase info: %v", err)
+		} else {
+			tkbyLog.Infof("Using purchase data from db for height %v:  %v ",
+				height, purchased)
+			ticketBuyerCfg.PrevToBuyHeight = blockHeight
+			ticketBuyerCfg.PrevToBuyDiffPeriod = purchased
+		}
+	}
+
 	p, err := ticketbuyer.NewTicketPurchaser(ticketbuyerCfg,
 		dcrdClient, w, activeNet.Params)
 	if err != nil {
