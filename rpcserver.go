@@ -21,6 +21,7 @@ import (
 	"github.com/decred/dcrwallet/loader"
 	"github.com/decred/dcrwallet/rpc/legacyrpc"
 	"github.com/decred/dcrwallet/rpc/rpcserver"
+	"github.com/decred/dcrwallet/ticketbuyer"
 	"github.com/decred/dcrwallet/wallet"
 
 	"google.golang.org/grpc"
@@ -250,9 +251,12 @@ func makeListeners(normalizedListenAddrs []string, listen listenFunc) []net.List
 // with a wallet to enable remote wallet access.  For the GRPC server, this
 // registers the WalletService service, and for the legacy JSON-RPC server it
 // enables methods that require a loaded wallet.
-func startWalletRPCServices(wallet *wallet.Wallet, server *grpc.Server, legacyServer *legacyrpc.Server) {
+func startWalletRPCServices(wallet *wallet.Wallet, loader *loader.Loader,
+	server *grpc.Server, legacyServer *legacyrpc.Server,
+	ticketbuyerCfg *ticketbuyer.Config) {
 	if server != nil {
 		rpcserver.StartWalletService(server, wallet)
+		rpcserver.StartTicketBuyerService(server, loader, ticketbuyerCfg)
 	}
 	if legacyServer != nil {
 		legacyServer.RegisterWallet(wallet)
