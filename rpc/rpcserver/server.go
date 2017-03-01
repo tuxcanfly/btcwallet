@@ -41,6 +41,7 @@ import (
 	"github.com/decred/dcrwallet/loader"
 	"github.com/decred/dcrwallet/netparams"
 	pb "github.com/decred/dcrwallet/rpc/walletrpc"
+	"github.com/decred/dcrwallet/ticketbuyer"
 	"github.com/decred/dcrwallet/waddrmgr"
 	"github.com/decred/dcrwallet/wallet"
 	"github.com/decred/dcrwallet/wallet/txauthor"
@@ -140,6 +141,181 @@ func decodeAddress(a string, params *chaincfg.Params) (dcrutil.Address, error) {
 type versionServer struct {
 }
 
+// ticketBuyerServer provides ticket buyer services for RPC clients.
+type ticketBuyerServer struct {
+	loader         *loader.Loader
+	ticketbuyerCfg *ticketbuyer.Config
+}
+
+// TicketBuyerConfig returns the configuration of the ticket buyer.
+func (t *ticketBuyerServer) TicketBuyerConfig(ctx context.Context, req *pb.TicketBuyerConfigRequest) (
+	*pb.TicketBuyerConfigResponse, error) {
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	config, err := pm.Purchaser().Config()
+	if err != nil {
+		return nil, err
+	}
+	return &pb.TicketBuyerConfigResponse{
+		AccountName:           config.AccountName,
+		AvgPriceMode:          config.AvgPriceMode,
+		AvgPriceVWAPDelta:     int64(config.AvgPriceVWAPDelta),
+		BalanceToMaintain:     int64(config.BalanceToMaintainAbsolute),
+		BlocksToAvg:           int64(config.BlocksToAvg),
+		DontWaitForTickets:    config.DontWaitForTickets,
+		ExpiryDelta:           int64(config.ExpiryDelta),
+		FeeSource:             config.FeeSource,
+		FeeTargetScaling:      config.FeeTargetScaling,
+		MinFee:                int64(config.MinFee),
+		MinPriceScale:         config.MinPriceScale,
+		MaxFee:                int64(config.MaxFee),
+		MaxPerBlock:           int64(config.MaxPerBlock),
+		MaxPriceAbsolute:      int64(config.MaxPriceAbsolute),
+		MaxPriceRelative:      config.MaxPriceRelative,
+		MaxPriceScale:         config.MaxPriceScale,
+		MaxInMempool:          int64(config.MaxInMempool),
+		PoolAddress:           config.PoolAddress,
+		PoolFees:              config.PoolFees,
+		SpreadTicketPurchases: config.SpreadTicketPurchases,
+		TicketAddress:         config.TicketAddress,
+		TxFee:                 int64(config.TxFee),
+	}, nil
+}
+
+// SetAccountName sets the account name to use for purchasing tickets.
+func (t *ticketBuyerServer) SetAccountName(ctx context.Context, req *pb.SetAccountNameRequest) (
+	*pb.SetAccountNameResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	w, ok := t.loader.LoadedWallet()
+	if !ok {
+		return nil, grpc.Errorf(codes.FailedPrecondition, "wallet has not been loaded")
+	}
+	account, err := w.AccountNumber(req.AccountName)
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetAccount(account)
+	return &pb.SetAccountNameResponse{}, nil
+}
+
+// SetBalanceToMaintain sets the balance to be maintained in the wallet.
+func (t *ticketBuyerServer) SetBalanceToMaintain(ctx context.Context, req *pb.SetBalanceToMaintainRequest) (
+	*pb.SetBalanceToMaintainResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetBalanceToMaintain(dcrutil.Amount(req.BalanceToMaintain).ToCoin())
+	return &pb.SetBalanceToMaintainResponse{}, nil
+}
+
+// SetMaxFee sets the max ticket fee per KB to use when purchasing tickets.
+func (t *ticketBuyerServer) SetMaxFee(ctx context.Context, req *pb.SetMaxFeeRequest) (
+	*pb.SetMaxFeeResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetMaxFee(dcrutil.Amount(req.MaxFee).ToCoin())
+	return &pb.SetMaxFeeResponse{}, nil
+}
+
+// SetMaxPriceRelative sets max price scaling factor.
+func (t *ticketBuyerServer) SetMaxPriceRelative(ctx context.Context, req *pb.SetMaxPriceRelativeRequest) (
+	*pb.SetMaxPriceRelativeResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetMaxPriceRelative(req.MaxPriceRelative)
+	return &pb.SetMaxPriceRelativeResponse{}, nil
+}
+
+// SetMaxPriceAbsolute sets the max absolute price to purchase a ticket.
+func (t *ticketBuyerServer) SetMaxPriceAbsolute(ctx context.Context, req *pb.SetMaxPriceAbsoluteRequest) (
+	*pb.SetMaxPriceAbsoluteResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetMaxPriceAbsolute(dcrutil.Amount(req.MaxPriceAbsolute).ToCoin())
+	return &pb.SetMaxPriceAbsoluteResponse{}, nil
+}
+
+// SetTicketAddress sets the address to send ticket outputs to.
+func (t *ticketBuyerServer) SetTicketAddress(ctx context.Context, req *pb.SetTicketAddressRequest) (
+	*pb.SetTicketAddressResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	w, ok := t.loader.LoadedWallet()
+	if !ok {
+		return nil, grpc.Errorf(codes.FailedPrecondition, "wallet has not been loaded")
+	}
+	ticketAddress, err := decodeAddress(req.TicketAddress, w.ChainParams())
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetTicketAddress(ticketAddress)
+	return &pb.SetTicketAddressResponse{}, nil
+}
+
+// SetPoolAddress sets the pool address where ticket fees are sent.
+func (t *ticketBuyerServer) SetPoolAddress(ctx context.Context, req *pb.SetPoolAddressRequest) (
+	*pb.SetPoolAddressResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	w, ok := t.loader.LoadedWallet()
+	if !ok {
+		return nil, grpc.Errorf(codes.FailedPrecondition, "wallet has not been loaded")
+	}
+	poolAddress, err := decodeAddress(req.PoolAddress, w.ChainParams())
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetPoolAddress(poolAddress)
+	return &pb.SetPoolAddressResponse{}, nil
+}
+
+// SetPoolFees sets the percent of ticket per ticket fee mandated by the pool.
+func (t *ticketBuyerServer) SetPoolFees(ctx context.Context, req *pb.SetPoolFeesRequest) (
+	*pb.SetPoolFeesResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetPoolFees(req.PoolFees)
+	return &pb.SetPoolFeesResponse{}, nil
+}
+
+// SetMaxPerBlock sets the max tickets to purchase for a block.
+func (t *ticketBuyerServer) SetMaxPerBlock(ctx context.Context, req *pb.SetMaxPerBlockRequest) (
+	*pb.SetMaxPerBlockResponse, error) {
+
+	pm, err := t.requirePurchaseManager()
+	if err != nil {
+		return nil, err
+	}
+	pm.Purchaser().SetMaxPerBlock(int(req.MaxPerBlock))
+	return &pb.SetMaxPerBlockResponse{}, nil
+}
+
 // walletServer provides wallet services for RPC clients.
 type walletServer struct {
 	wallet *wallet.Wallet
@@ -175,6 +351,13 @@ func (*versionServer) Version(ctx context.Context, req *pb.VersionRequest) (*pb.
 	}, nil
 }
 
+// StartTicketBuyerService creates an implementation of the TicketBuyerService
+// and registers it wih the gRPC server.
+func StartTicketBuyerService(server *grpc.Server, loader *loader.Loader, ticketbuyerCfg *ticketbuyer.Config) {
+	service := &ticketBuyerServer{loader, ticketbuyerCfg}
+	pb.RegisterTicketBuyerServiceServer(server, service)
+}
+
 // StartWalletService creates an implementation of the WalletService and
 // registers it with the gRPC server.
 func StartWalletService(server *grpc.Server, wallet *wallet.Wallet) {
@@ -191,6 +374,16 @@ func (s *walletServer) requireChainClient() (*chain.RPCClient, error) {
 			"wallet is not associated with a consensus server RPC client")
 	}
 	return chainClient, nil
+}
+
+// requirePurchaseManager checks whether the ticket buyer is running, returning
+// a gRPC error when it is not.
+func (t *ticketBuyerServer) requirePurchaseManager() (*ticketbuyer.PurchaseManager, error) {
+	pm := t.loader.PurchaseManager()
+	if pm == nil {
+		return nil, grpc.Errorf(codes.FailedPrecondition, "ticket buyer is not running")
+	}
+	return pm, nil
 }
 
 func (s *walletServer) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {

@@ -165,7 +165,7 @@ func walletMain() error {
 	}
 
 	loader.RunAfterLoad(func(w *wallet.Wallet) {
-		startWalletRPCServices(w, rpcs, legacyRPCServer)
+		startWalletRPCServices(w, loader, rpcs, legacyRPCServer, &cfg.tbCfg)
 	})
 
 	if cfg.PipeRx != nil {
