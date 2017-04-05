@@ -293,12 +293,13 @@ func (l *Loader) StartTicketPurchase(passphrase []byte, ticketbuyerCfg *ticketbu
 		return ErrWalletNotLoaded
 	}
 
-	if l.chainClient == nil {
+	chainClient := l.wallet.ChainClient()
+	if chainClient == nil {
 		return ErrNoChainClient
 	}
 
 	w := l.wallet
-	p, err := ticketbuyer.NewTicketPurchaser(ticketbuyerCfg, l.chainClient, w, l.chainParams)
+	p, err := ticketbuyer.NewTicketPurchaser(ticketbuyerCfg, chainClient.Client, w, l.chainParams)
 	if err != nil {
 		return err
 	}
