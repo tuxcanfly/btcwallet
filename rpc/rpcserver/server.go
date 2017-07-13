@@ -105,6 +105,8 @@ type versionServer struct {
 // walletServer provides wallet services for RPC clients.
 type walletServer struct {
 	wallet *wallet.Wallet
+	wChan  chan *wallet.Wallet
+	mu     sync.Mutex
 }
 
 // loaderServer provides RPC clients with the ability to load and close wallets,
@@ -113,6 +115,7 @@ type loaderServer struct {
 	loader    *wallet.Loader
 	activeNet *netparams.Params
 	rpcClient *chain.RPCClient
+	wChan     chan *wallet.Wallet
 	mu        sync.Mutex
 }
 
@@ -133,9 +136,21 @@ func (*versionServer) Version(ctx context.Context, req *pb.VersionRequest) (*pb.
 
 // StartWalletService creates an implementation of the WalletService and
 // registers it with the gRPC server.
-func StartWalletService(server *grpc.Server, wallet *wallet.Wallet) {
-	service := &walletServer{wallet}
+func StartWalletService(server *grpc.Server, wallet *wallet.Wallet, wChan chan *wallet.Wallet) {
+	service := &walletServer{wallet: wallet, wChan: wChan}
+	go service.update()
 	pb.RegisterWalletServiceServer(server, service)
+}
+
+func (s *walletServer) update() {
+	for {
+		select {
+		case w := <-s.wChan:
+			s.mu.Lock()
+			s.wallet = w
+			s.mu.Unlock()
+		}
+	}
 }
 
 func (s *walletServer) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
@@ -144,12 +159,16 @@ func (s *walletServer) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingR
 
 func (s *walletServer) Network(ctx context.Context, req *pb.NetworkRequest) (
 	*pb.NetworkResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	return &pb.NetworkResponse{ActiveNetwork: uint32(s.wallet.ChainParams().Net)}, nil
 }
 
 func (s *walletServer) AccountNumber(ctx context.Context, req *pb.AccountNumberRequest) (
 	*pb.AccountNumberResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	accountNum, err := s.wallet.Manager.LookupAccount(req.AccountName)
 	if err != nil {
@@ -161,6 +180,8 @@ func (s *walletServer) AccountNumber(ctx context.Context, req *pb.AccountNumberR
 
 func (s *walletServer) Accounts(ctx context.Context, req *pb.AccountsRequest) (
 	*pb.AccountsResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	resp, err := s.wallet.Accounts()
 	if err != nil {
@@ -187,6 +208,8 @@ func (s *walletServer) Accounts(ctx context.Context, req *pb.AccountsRequest) (
 
 func (s *walletServer) RenameAccount(ctx context.Context, req *pb.RenameAccountRequest) (
 	*pb.RenameAccountResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	err := s.wallet.RenameAccount(req.AccountNumber, req.NewName)
 	if err != nil {
@@ -198,6 +221,8 @@ func (s *walletServer) RenameAccount(ctx context.Context, req *pb.RenameAccountR
 
 func (s *walletServer) NextAccount(ctx context.Context, req *pb.NextAccountRequest) (
 	*pb.NextAccountResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	defer zero.Bytes(req.Passphrase)
 
@@ -224,6 +249,8 @@ func (s *walletServer) NextAccount(ctx context.Context, req *pb.NextAccountReque
 
 func (s *walletServer) NextAddress(ctx context.Context, req *pb.NextAddressRequest) (
 	*pb.NextAddressResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	var (
 		addr btcutil.Address
@@ -246,6 +273,8 @@ func (s *walletServer) NextAddress(ctx context.Context, req *pb.NextAddressReque
 
 func (s *walletServer) ImportPrivateKey(ctx context.Context, req *pb.ImportPrivateKeyRequest) (
 	*pb.ImportPrivateKeyResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	defer zero.Bytes(req.Passphrase)
 
@@ -281,6 +310,8 @@ func (s *walletServer) ImportPrivateKey(ctx context.Context, req *pb.ImportPriva
 
 func (s *walletServer) Balance(ctx context.Context, req *pb.BalanceRequest) (
 	*pb.BalanceResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	account := req.AccountNumber
 	reqConfs := req.RequiredConfirmations
@@ -319,6 +350,8 @@ func confirms(txHeight, curHeight int32) int32 {
 
 func (s *walletServer) FundTransaction(ctx context.Context, req *pb.FundTransactionRequest) (
 	*pb.FundTransactionResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// TODO: A predicate function for selecting outputs should be created
 	// and passed to a database view of just a particular account's utxos to
@@ -456,10 +489,13 @@ func (s *walletServer) GetTransactions(ctx context.Context, req *pb.GetTransacti
 
 	_ = minRecentTxs
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	gtr, err := s.wallet.GetTransactions(startBlock, endBlock, ctx.Done())
 	if err != nil {
 		return nil, translateError(err)
 	}
+
 	return marshalGetTransactionsResult(gtr)
 }
 
@@ -471,6 +507,8 @@ func (s *walletServer) ChangePassphrase(ctx context.Context, req *pb.ChangePassp
 		zero.Bytes(req.NewPassphrase)
 	}()
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	err := s.wallet.Manager.ChangePassphrase(req.OldPassphrase, req.NewPassphrase,
 		req.Key != pb.ChangePassphraseRequest_PUBLIC, &waddrmgr.DefaultScryptOptions)
 	if err != nil {
@@ -484,6 +522,8 @@ func (s *walletServer) ChangePassphrase(ctx context.Context, req *pb.ChangePassp
 // - InputIndexes request field is ignored.
 func (s *walletServer) SignTransaction(ctx context.Context, req *pb.SignTransactionRequest) (
 	*pb.SignTransactionResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	defer zero.Bytes(req.Passphrase)
 
@@ -544,6 +584,8 @@ func (s *walletServer) PublishTransaction(ctx context.Context, req *pb.PublishTr
 			"Bytes do not represent a valid raw transaction: %v", err)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	err = s.wallet.PublishTransaction(&msgTx)
 	if err != nil {
 		return nil, translateError(err)
@@ -631,7 +673,9 @@ func marshalAccountBalances(v []wallet.AccountBalance) []*pb.AccountBalance {
 func (s *walletServer) TransactionNotifications(req *pb.TransactionNotificationsRequest,
 	svr pb.WalletService_TransactionNotificationsServer) error {
 
+	s.mu.Lock()
 	n := s.wallet.NtfnServer.TransactionNotifications()
+	s.mu.Unlock()
 	defer n.Done()
 
 	ctxDone := svr.Context().Done()
@@ -663,7 +707,9 @@ func (s *walletServer) SpentnessNotifications(req *pb.SpentnessNotificationsRequ
 			"no_notify_unspent and no_notify_spent may not both be true")
 	}
 
+	s.mu.Lock()
 	n := s.wallet.NtfnServer.AccountSpentnessNotifications(req.Account)
+	s.mu.Unlock()
 	defer n.Done()
 
 	ctxDone := svr.Context().Done()
@@ -699,7 +745,9 @@ func (s *walletServer) SpentnessNotifications(req *pb.SpentnessNotificationsRequ
 func (s *walletServer) AccountNotifications(req *pb.AccountNotificationsRequest,
 	svr pb.WalletService_AccountNotificationsServer) error {
 
+	s.mu.Lock()
 	n := s.wallet.NtfnServer.AccountNotifications()
+	s.mu.Unlock()
 	defer n.Done()
 
 	ctxDone := svr.Context().Done()
@@ -727,9 +775,9 @@ func (s *walletServer) AccountNotifications(req *pb.AccountNotificationsRequest,
 // StartWalletLoaderService creates an implementation of the WalletLoaderService
 // and registers it with the gRPC server.
 func StartWalletLoaderService(server *grpc.Server, loader *wallet.Loader,
-	activeNet *netparams.Params) {
+	activeNet *netparams.Params, wChan chan *wallet.Wallet) {
 
-	service := &loaderServer{loader: loader, activeNet: activeNet}
+	service := &loaderServer{loader: loader, activeNet: activeNet, wChan: wChan}
 	pb.RegisterWalletLoaderServiceServer(server, service)
 }
 
@@ -774,6 +822,7 @@ func (s *loaderServer) OpenWallet(ctx context.Context, req *pb.OpenWalletRequest
 	if err != nil {
 		return nil, translateError(err)
 	}
+	s.wChan <- wallet
 
 	s.mu.Lock()
 	if s.rpcClient != nil {

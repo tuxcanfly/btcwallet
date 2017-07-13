@@ -102,7 +102,7 @@ func generateRPCKeyPair(writeKey bool) (tls.Certificate, error) {
 	return keyPair, nil
 }
 
-func startRPCServers(walletLoader *wallet.Loader) (*grpc.Server, *legacyrpc.Server, error) {
+func startRPCServers(walletLoader *wallet.Loader, wChan chan *wallet.Wallet) (*grpc.Server, *legacyrpc.Server, error) {
 	var (
 		server       *grpc.Server
 		legacyServer *legacyrpc.Server
@@ -137,7 +137,7 @@ func startRPCServers(walletLoader *wallet.Loader) (*grpc.Server, *legacyrpc.Serv
 			creds := credentials.NewServerTLSFromCert(&keyPair)
 			server = grpc.NewServer(grpc.Creds(creds))
 			rpcserver.StartVersionService(server)
-			rpcserver.StartWalletLoaderService(server, walletLoader, activeNet)
+			rpcserver.StartWalletLoaderService(server, walletLoader, activeNet, wChan)
 			for _, lis := range listeners {
 				lis := lis
 				go func() {
@@ -244,9 +244,9 @@ func makeListeners(normalizedListenAddrs []string, listen listenFunc) []net.List
 // with a wallet to enable remote wallet access.  For the GRPC server, this
 // registers the WalletService service, and for the legacy JSON-RPC server it
 // enables methods that require a loaded wallet.
-func startWalletRPCServices(wallet *wallet.Wallet, server *grpc.Server, legacyServer *legacyrpc.Server) {
+func startWalletRPCServices(wallet *wallet.Wallet, server *grpc.Server, legacyServer *legacyrpc.Server, wChan chan *wallet.Wallet) {
 	if server != nil {
-		rpcserver.StartWalletService(server, wallet)
+		rpcserver.StartWalletService(server, wallet, wChan)
 	}
 	if legacyServer != nil {
 		legacyServer.RegisterWallet(wallet)

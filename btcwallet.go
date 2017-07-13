@@ -68,10 +68,11 @@ func walletMain() error {
 	dbDir := networkDir(cfg.AppDataDir.Value, activeNet.Params)
 	loader := wallet.NewLoader(activeNet.Params)
 
+	wChan := make(chan *wallet.Wallet)
 	// Create and start HTTP server to serve wallet client connections.
 	// This will be updated with the wallet and chain server RPC client
 	// created below after each is created.
-	rpcs, legacyRPCServer, err := startRPCServers(loader)
+	rpcs, legacyRPCServer, err := startRPCServers(loader, wChan)
 	if err != nil {
 		log.Errorf("Unable to create RPC servers: %v", err)
 		return err
@@ -84,7 +85,7 @@ func walletMain() error {
 	}
 
 	loader.RunAfterLoad(func(w *wallet.Wallet) {
-		startWalletRPCServices(w, rpcs, legacyRPCServer)
+		startWalletRPCServices(w, rpcs, legacyRPCServer, wChan)
 	})
 
 	if !cfg.NoInitialLoad {
