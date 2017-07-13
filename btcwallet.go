@@ -66,7 +66,7 @@ func walletMain() error {
 	}
 
 	dbDir := networkDir(cfg.AppDataDir.Value, activeNet.Params)
-	loader := wallet.NewLoader(activeNet.Params, dbDir)
+	loader := wallet.NewLoader(activeNet.Params)
 
 	// Create and start HTTP server to serve wallet client connections.
 	// This will be updated with the wallet and chain server RPC client
@@ -90,7 +90,7 @@ func walletMain() error {
 	if !cfg.NoInitialLoad {
 		// Load the wallet database.  It must have been created already
 		// or this will return an appropriate error.
-		_, err = loader.OpenExistingWallet([]byte(cfg.WalletPass), true)
+		_, err = loader.OpenExistingWallet(dbDir, []byte(cfg.WalletPass), true)
 		if err != nil {
 			log.Error(err)
 			return err

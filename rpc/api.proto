@@ -292,18 +292,24 @@ message CreateWalletRequest {
 	bytes public_passphrase = 1;
 	bytes private_passphrase = 2;
 	bytes seed = 3;
+	string path = 4;
 }
 message CreateWalletResponse {}
 
 message OpenWalletRequest {
 	bytes public_passphrase = 1;
+	string path = 2;
 }
 message OpenWalletResponse {}
 
-message CloseWalletRequest {}
+message CloseWalletRequest {
+	string path = 1;
+}
 message CloseWalletResponse {}
 
-message WalletExistsRequest {}
+message WalletExistsRequest {
+	string path = 1;
+}
 message WalletExistsResponse {
 	bool exists = 1;
 }
@@ -313,5 +319,6 @@ message StartConsensusRpcRequest {
 	string username = 2;
 	bytes password = 3;
 	bytes certificate = 4;
+	string path = 5;
 }
 message StartConsensusRpcResponse {}

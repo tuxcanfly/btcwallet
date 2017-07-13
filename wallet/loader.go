@@ -44,17 +44,15 @@ var (
 type Loader struct {
 	callbacks   []func(*Wallet)
 	chainParams *chaincfg.Params
-	dbDirPath   string
 	wallet      *Wallet
 	db          walletdb.DB
 	mu          sync.Mutex
 }
 
 // NewLoader constructs a Loader.
-func NewLoader(chainParams *chaincfg.Params, dbDirPath string) *Loader {
+func NewLoader(chainParams *chaincfg.Params) *Loader {
 	return &Loader{
 		chainParams: chainParams,
-		dbDirPath:   dbDirPath,
 	}
 }
 
@@ -88,7 +86,7 @@ func (l *Loader) RunAfterLoad(fn func(*Wallet)) {
 // CreateNewWallet creates a new wallet using the provided public and private
 // passphrases.  The seed is optional.  If non-nil, addresses are derived from
 // this seed.  If nil, a secure random seed is generated.
-func (l *Loader) CreateNewWallet(pubPassphrase, privPassphrase, seed []byte) (*Wallet, error) {
+func (l *Loader) CreateNewWallet(dbDirPath string, pubPassphrase, privPassphrase, seed []byte) (*Wallet, error) {
 	defer l.mu.Unlock()
 	l.mu.Lock()
 
@@ -96,7 +94,7 @@ func (l *Loader) CreateNewWallet(pubPassphrase, privPassphrase, seed []byte) (*W
 		return nil, ErrLoaded
 	}
 
-	dbPath := filepath.Join(l.dbDirPath, walletDbName)
+	dbPath := filepath.Join(dbDirPath, walletDbName)
 	exists, err := fileExists(dbPath)
 	if err != nil {
 		return nil, err
@@ -106,7 +104,7 @@ func (l *Loader) CreateNewWallet(pubPassphrase, privPassphrase, seed []byte) (*W
 	}
 
 	// Create the wallet database backed by bolt db.
-	err = os.MkdirAll(l.dbDirPath, 0700)
+	err = os.MkdirAll(dbDirPath, 0700)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +140,7 @@ func noConsole() ([]byte, error) {
 // and the public passphrase.  If the loader is being called by a context where
 // standard input prompts may be used during wallet upgrades, setting
 // canConsolePrompt will enables these prompts.
-func (l *Loader) OpenExistingWallet(pubPassphrase []byte, canConsolePrompt bool) (*Wallet, error) {
+func (l *Loader) OpenExistingWallet(dbDirPath string, pubPassphrase []byte, canConsolePrompt bool) (*Wallet, error) {
 	defer l.mu.Unlock()
 	l.mu.Lock()
 
@@ -151,12 +149,12 @@ func (l *Loader) OpenExistingWallet(pubPassphrase []byte, canConsolePrompt bool)
 	}
 
 	// Ensure that the network directory exists.
-	if err := checkCreateDir(l.dbDirPath); err != nil {
+	if err := checkCreateDir(dbDirPath); err != nil {
 		return nil, err
 	}
 
 	// Open the database using the boltdb backend.
-	dbPath := filepath.Join(l.dbDirPath, walletDbName)
+	dbPath := filepath.Join(dbDirPath, walletDbName)
 	db, err := walletdb.Open("bdb", dbPath)
 	if err != nil {
 		log.Errorf("Failed to open database: %v", err)
@@ -187,8 +185,8 @@ func (l *Loader) OpenExistingWallet(pubPassphrase []byte, canConsolePrompt bool)
 
 // WalletExists returns whether a file exists at the loader's database path.
 // This may return an error for unexpected I/O failures.
-func (l *Loader) WalletExists() (bool, error) {
-	dbPath := filepath.Join(l.dbDirPath, walletDbName)
+func (l *Loader) WalletExists(dbDirPath string) (bool, error) {
+	dbPath := filepath.Join(dbDirPath, walletDbName)
 	return fileExists(dbPath)
 }
 
@@ -223,6 +221,7 @@ func (l *Loader) UnloadWallet() error {
 
 	l.wallet = nil
 	l.db = nil
+	log.Info("Closed Wallet")
 	return nil
 }
 

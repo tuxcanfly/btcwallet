@@ -747,7 +747,7 @@ func (s *loaderServer) CreateWallet(ctx context.Context, req *pb.CreateWalletReq
 		pubPassphrase = []byte(wallet.InsecurePubPassphrase)
 	}
 
-	wallet, err := s.loader.CreateNewWallet(pubPassphrase, req.PrivatePassphrase, req.Seed)
+	wallet, err := s.loader.CreateNewWallet(req.Path, pubPassphrase, req.PrivatePassphrase, req.Seed)
 	if err != nil {
 		return nil, translateError(err)
 	}
@@ -770,7 +770,7 @@ func (s *loaderServer) OpenWallet(ctx context.Context, req *pb.OpenWalletRequest
 		pubPassphrase = []byte(wallet.InsecurePubPassphrase)
 	}
 
-	wallet, err := s.loader.OpenExistingWallet(pubPassphrase, false)
+	wallet, err := s.loader.OpenExistingWallet(req.Path, pubPassphrase, false)
 	if err != nil {
 		return nil, translateError(err)
 	}
@@ -787,7 +787,7 @@ func (s *loaderServer) OpenWallet(ctx context.Context, req *pb.OpenWalletRequest
 func (s *loaderServer) WalletExists(ctx context.Context, req *pb.WalletExistsRequest) (
 	*pb.WalletExistsResponse, error) {
 
-	exists, err := s.loader.WalletExists()
+	exists, err := s.loader.WalletExists(req.Path)
 	if err != nil {
 		return nil, translateError(err)
 	}
